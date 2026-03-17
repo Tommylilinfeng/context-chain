@@ -1,0 +1,108 @@
+{
+  "decisions": [
+    {
+      "id": "dc:cold:orderService:001",
+      "summary": "下单逻辑全部走 PostgreSQL RPC",
+      "content": "createOrder 没有直接操作数据库表，而是调 Supabase RPC（place_order）把所有下单逻辑放在 PostgreSQL 函数里。这个决策让原子性由数据库层保证——库存扣减、订单创建、coupon 核销在同一个事务内完成，不需要应用层实现分布式事务或补偿机制。代价是业务逻辑分散在前端 repo 和数据库 repo 两个地方，调试和修改都需要切换上下文。",
+      "keywords": ["RPC", "place_order", "Supabase", "原子性", "PostgreSQL", "下单"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/orderService.ts"
+    },
+    {
+      "id": "dc:cold:orderService:002",
+      "summary": "支持 guest 下单，userId 可为 null",
+      "content": "createOrder 的 userId 是可选字段，isGuest 标志位单独传。这说明系统明确支持未登录用户下单，而不是强制注册。guest 订单用 contact_email 标识而非 user_id，导致 getGuestOrders 和 getUserOrders 是两个完全不同的查询路径。这个决策增加了转化率（不强制注册），但 guest 订单无法和之后注册的账号合并历史记录。",
+      "keywords": ["guest", "未登录", "userId", "isGuest", "匿名下单"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/orderService.ts"
+    },
+    {
+      "id": "dc:cold:orderService:003",
+      "summary": "错误码从数据库返回，前端查表翻译",
+      "content": "createOrder 收到 RPC 返回的 error.code 后，调 getErrorMessage(errorCode, language) 把错误码翻译成用户可见的文字。错误码是字符串（如 INTERNAL_ERROR），翻译逻辑在前端 errorMessages.ts 里。这个设计让错误的业务语义在数据库层定义，展示语言在前端控制，支持多语言。缺点是如果数据库新增错误码，前端 errorMessages.ts 也要同步更新，容易漏。",
+      "keywords": ["错误码", "多语言", "getErrorMessage", "错误处理", "国际化"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/orderService.ts"
+    },
+    {
+      "id": "dc:cold:cartLogic:001",
+      "summary": "cartItemId 编码 customization 信息，用于唯一标识",
+      "content": "generateCartItemId 把 menuItemId 和 customization 的 group_code + selection codes 组合成一个字符串 key。这意味着「同一道菜不同定制」在购物车里是两个独立条目，而不是同一条目的两个版本。设计选择的核心是把 customization 的唯一性编码进 ID，而不是在比较时做深度对象比较。排序保证了相同 customization 组合永远生成相同 ID（order-independent）。",
+      "keywords": ["cartItemId", "customization", "唯一标识", "购物车", "ID生成"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/logic/cart.ts"
+    },
+    {
+      "id": "dc:cold:cartLogic:002",
+      "summary": "price 字段保留做向后兼容，实际用 basePrice",
+      "content": "CartItem interface 同时有 basePrice 和 price 两个字段，注释明确说 price 是 basePrice + customizationTotal 的向后兼容字段。calculateCartTotal 里优先用 basePrice，fallback 到 price。这说明系统曾经只有单一 price 字段，后来引入了 basePrice + customizationTotal 的拆分结构，但为了不破坏已有代码保留了 price 字段。这种向后兼容方式会让新开发者困惑。",
+      "keywords": ["price", "basePrice", "向后兼容", "customizationTotal", "CartItem"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/logic/cart.ts"
+    },
+    {
+      "id": "dc:cold:cartLogic:003",
+      "summary": "formatCartItemsForOrder 丢弃 special_instructions，硬编码为 null",
+      "content": "formatCartItemsForOrder 把 CartItem 转换为下单格式时，special_instructions 直接写死为 null，即使 CartItem 里可能有这个字段的值。这说明当时实现下单功能时，item 级别的特殊说明暂时不支持（或者已经移除了），但这个决定没有在代码里留下注释，容易让后来的人误以为这是 bug 而不是有意为之。",
+      "keywords": ["special_instructions", "formatCartItemsForOrder", "下单", "购物车"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/logic/cart.ts"
+    },
+    {
+      "id": "dc:cold:menuService:001",
+      "summary": "vendor 可用性判断完全下推到数据库 RPC",
+      "content": "getAvailableVendorIds 调 get_available_vendors RPC，把时区处理、日历判断、time slot 匹配全部放在数据库里。前端拿到的直接是可用 vendor ID 列表，不做任何时间计算。这个决策让前端完全不用关心营业时间逻辑，但同时意味着所有时间相关 bug 都要去数据库层排查，本地调试困难。",
+      "keywords": ["get_available_vendors", "RPC", "vendor可用性", "时区", "time slot"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/menuService.ts"
+    },
+    {
+      "id": "dc:cold:menuService:002",
+      "summary": "默认排序用 smartShuffleByVendor 保证多样性",
+      "content": "getMenuItems 在没有指定 sortBy 或 searchQuery 时，用 smartShuffleByVendor 替代直接返回数据库排序结果。这个 shuffle 算法优先保证每个 vendor 都有一道菜出现在列表前部，然后再随机排列剩余商品。这是一个用户体验决策：避免一个 vendor 的商品霸占列表前排，确保用户看到多样的选项。代价是排序不确定，同样的查询每次结果不同。",
+      "keywords": ["smartShuffleByVendor", "排序", "多样性", "vendor", "用户体验"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/menuService.ts"
+    },
+    {
+      "id": "dc:cold:menuService:003",
+      "summary": "menu_item_prices 表控制 time slot 级别的商品下架",
+      "content": "getMenuItems 在拿到菜单数据后，还要过滤 menu_item_prices 表里 is_unavailable=true 的商品。这说明有些商品在特定 time slot 不可用，不是通过修改 is_available 字段（全局下架），而是通过 menu_item_prices 表的 time_slot 维度控制。这个设计允许精细化控制，但在前端增加了一层 post-query 过滤，需要把 time slot ID 一路传进来。",
+      "keywords": ["menu_item_prices", "is_unavailable", "time_slot", "商品可用性", "时间段"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/menuService.ts"
+    },
+    {
+      "id": "dc:cold:couponService:001",
+      "summary": "coupon 操作走 Edge Function 而非直接操作数据库",
+      "content": "claimCoupon、getUserCoupons、validateCoupon 全部调 Supabase Edge Function（supabase.functions.invoke），而不是像其他服务一样直接查表或调 RPC。这个区别说明 coupon 逻辑有更高的安全要求——Edge Function 在服务端运行，可以隐藏业务规则、防止客户端篡改。代价是 Edge Function 要单独部署、单独调试，和其他数据库 RPC 的开发体验不一致。",
+      "keywords": ["Edge Function", "coupon", "Supabase", "安全", "claim-coupon"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/couponService.ts"
+    },
+    {
+      "id": "dc:cold:couponService:002",
+      "summary": "getUserCoupons 传入订单上下文用于资格预判断",
+      "content": "getUserCoupons 接受 location_id、run_type、subtotal、vendor_ids 等订单参数，这些是可选的。当传入时，服务端可以在返回 coupon 列表的同时计算每个 coupon 是否适用于当前订单，前端不需要再做二次过滤。这个设计把 coupon 资格判断的复杂逻辑放在服务端一次性完成，代价是 API 调用需要携带订单上下文，调用时机必须在用户已选好商品之后。",
+      "keywords": ["getUserCoupons", "coupon资格", "订单上下文", "subtotal", "vendor_ids"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/services/couponService.ts"
+    },
+    {
+      "id": "dc:cold:customizationHelpers:001",
+      "summary": "customization 存为 snapshot，不引用原始数据",
+      "content": "CustomizationSnapshot 把 group_name_en、group_name_zh、selections 的 name 都直接存下来，而不是只存 ID 引用。这是一个快照（snapshot）设计——即使之后商家修改了 customization 选项的名称或价格，历史订单里记录的仍然是下单时的状态。代价是数据冗余，coupon 逻辑和购物车逻辑都要维护这个快照结构的完整性。",
+      "keywords": ["CustomizationSnapshot", "快照", "历史订单", "customization", "数据冗余"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/utils/customizationHelpers.ts"
+    },
+    {
+      "id": "dc:cold:menuHelpers:001",
+      "summary": "smartShuffleByVendor 保证 vendor 多样性优先于随机性",
+      "content": "smartShuffleByVendor 分两步：先从每个 vendor 各取一道菜放到列表前部，再把剩余商品随机排列附加在后面。这不是纯随机 shuffle，而是一个有偏向的排列——优先保证用户在首屏能看到多个不同 vendor 的商品。这个算法的前提假设是「用户更可能因为看到多样选择而购买」，如果某个 vendor 的商品特别受欢迎，这个算法反而会压制它的曝光。",
+      "keywords": ["smartShuffleByVendor", "Fisher-Yates", "vendor多样性", "首屏", "排序算法"],
+      "scope": ["bite-me-website"],
+      "anchor_path": "biteme-shared/src/utils/menuHelpers.ts"
+    }
+  ]
+}

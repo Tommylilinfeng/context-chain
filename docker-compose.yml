@@ -1,0 +1,29 @@
+services:
+  memgraph:
+    image: memgraph/memgraph:2.18.1
+    container_name: ckg-memgraph
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+      - memgraph-log:/var/log/memgraph
+    environment:
+      - MEMGRAPH_STORAGE_MODE=IN_MEMORY_TRANSACTIONAL
+    restart: unless-stopped
+
+  memgraph-lab:
+    image: memgraph/lab:2.15.0
+    container_name: ckg-memgraph-lab
+    ports:
+      - "3000:3000"
+    depends_on:
+      - memgraph
+    environment:
+      - QUICK_CONNECT_MG_HOST=memgraph
+      - QUICK_CONNECT_MG_PORT=7687
+    restart: unless-stopped
+
+volumes:
+  memgraph-data:
+  memgraph-log:

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "context-knowledge-graph": {
+      "command": "node_modules/.bin/ts-node",
+      "args": ["src/mcp/server.ts"],
+      "cwd": "/Users/zhouyitong/dev/context-knowledge-graph"
+    }
+  }
+}

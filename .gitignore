@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Data files (too large / machine-specific)
+data/bite.json
+data/ingested-sessions.json
+
+# Joern workspace
+workspace/
+
+# Environment
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

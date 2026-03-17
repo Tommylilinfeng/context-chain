@@ -1,0 +1,27 @@
+{
+  "name": "context-knowledge-graph",
+  "version": "0.1.0",
+  "description": "决策知识图谱基础设施 - grep找的是写了什么，我们记录的是为什么这样写",
+  "scripts": {
+    "build": "tsc",
+    "db:schema": "node_modules/.bin/ts-node src/db/schema.ts",
+    "db:reset": "node_modules/.bin/ts-node src/db/reset.ts",
+    "ingest:cpg": "node_modules/.bin/ts-node src/ingestion/ingest-cpg.ts",
+    "ingest:sessions": "node_modules/.bin/ts-node --transpile-only src/ingestion/ingest-sessions.ts",
+    "cold-start": "node_modules/.bin/ts-node --transpile-only src/ingestion/cold-start.ts",
+    "mcp": "node_modules/.bin/ts-node --transpile-only src/mcp/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.8.0",
+    "neo4j-driver": "^5.19.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+  },
+  "overrides": {
+    "typescript": "^5.4.0"
+  }
+}
