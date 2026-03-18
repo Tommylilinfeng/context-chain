@@ -1,4 +1,4 @@
-# Context Knowledge Graph (CKG)
+# decision-graph
 
 > **grep finds what code does. We record why it was written that way.**
 
@@ -12,7 +12,7 @@ In the AI-coding era, a developer + AI can independently build an entire microse
 
 Three months later, no one (including you) can answer: "Why was it written this way?"
 
-## What CKG Does
+## What decision-graph Does
 
 1. **Extracts decisions** from your code and AI conversation history
 2. **Stores them** in a knowledge graph anchored to your codebase
@@ -34,8 +34,8 @@ Three months later, no one (including you) can answer: "Why was it written this 
 ### Install
 
 ```bash
-git clone https://github.com/Tommylilinfeng/context-knowledge-graph.git
-cd context-knowledge-graph
+git clone https://github.com/Tommylilinfeng/decision-graph.git
+cd decision-graph
 bash scripts/setup.sh
 ```
 
@@ -142,9 +142,9 @@ After initialization, go to **Settings** tab in the Dashboard and copy the MCP c
 ```json
 {
   "mcpServers": {
-    "context-knowledge-graph": {
+    "decision-graph": {
       "command": "/bin/bash",
-      "args": ["/path/to/context-knowledge-graph/mcp-start.sh"],
+      "args": ["/path/to/decision-graph/mcp-start.sh"],
       "env": {
         "CKG_MEMGRAPH_PORT": "7687"
       }
@@ -160,7 +160,7 @@ The exact config (with correct paths and ports) is shown in the Dashboard.
 ## Project Structure
 
 ```
-context-knowledge-graph/
+decision-graph/
 ├── dashboard/                  # Next.js Dashboard (port 3001)
 │   ├── app/                    # Pages + API routes
 │   │   ├── page.tsx            # Home: project list

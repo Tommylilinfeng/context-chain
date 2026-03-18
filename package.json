@@ -1,5 +1,5 @@
 {
-  "name": "context-knowledge-graph",
+  "name": "decision-graph",
   "version": "0.1.0",
   "description": "决策知识图谱基础设施 - grep找的是写了什么，我们记录的是为什么这样写",
   "license": "Apache-2.0",
