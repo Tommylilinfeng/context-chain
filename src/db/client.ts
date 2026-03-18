@@ -1,8 +1,11 @@
 import neo4j, { Driver, Session } from 'neo4j-driver'
 
-// Memgraph 兼容 Neo4j 的 Bolt 协议，直接用 neo4j-driver
+// 支持通过环境变量指定端口（多项目场景下每个项目有自己的 Memgraph 实例）
+const port = process.env.CKG_MEMGRAPH_PORT || '7687'
+const uri = `bolt://localhost:${port}`
+
 const driver: Driver = neo4j.driver(
-  'bolt://localhost:7687',
+  uri,
   neo4j.auth.basic('', ''), // Memgraph 默认无需鉴权
   {
     maxConnectionPoolSize: 10,
@@ -16,7 +19,7 @@ export async function getSession(): Promise<Session> {
 
 export async function verifyConnectivity(): Promise<void> {
   await driver.verifyConnectivity()
-  console.log('✅ Memgraph 连接成功')
+  console.log(`✅ Memgraph 连接成功 (${uri})`)
 }
 
 export async function closeDriver(): Promise<void> {

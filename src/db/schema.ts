@@ -6,11 +6,7 @@
  *
  * 这个脚本是幂等的——重复运行不会出错
  *
- * 注：全文索引（slot2 关键词检索）暂时跳过。
- * Memgraph 2.18 的 text-search 是 experimental feature，
- * 在 Mac Docker 环境下会导致容器崩溃。
- * 替代方案：keywords 字段用数组存储，查询时用 ANY() 做精确匹配，
- * 后续如果需要模糊搜索再引入 Meilisearch。
+ * Memgraph 3.6+: text search 是正式功能，不需要 experimental flag
  */
 
 import { getSession, verifyConnectivity, closeDriver } from './client'
@@ -21,29 +17,49 @@ import { Session } from 'neo4j-driver'
 // ─────────────────────────────────────────────
 
 const CONSTRAINTS: string[] = [
+  `CREATE CONSTRAINT ON (n:Project) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:CodeEntity) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:DecisionContext) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:AggregatedSummary) ASSERT n.id IS UNIQUE`,
 ]
 
 // ─────────────────────────────────────────────
-// 索引（加速检索）
+// 属性索引
 // ─────────────────────────────────────────────
 
 const INDEXES: string[] = [
   // ── CodeEntity ──────────────────────────────
   `CREATE INDEX ON :CodeEntity(repo)`,
-  `CREATE INDEX ON :CodeEntity(entity_type)`,  // function | file | directory | service | api_endpoint
+  `CREATE INDEX ON :CodeEntity(entity_type)`,
   `CREATE INDEX ON :CodeEntity(name)`,
 
   // ── DecisionContext ──────────────────────────
-  `CREATE INDEX ON :DecisionContext(staleness)`,  // active | stale | archived
+  `CREATE INDEX ON :DecisionContext(staleness)`,
   `CREATE INDEX ON :DecisionContext(owner)`,
   `CREATE INDEX ON :DecisionContext(created_at)`,
-  `CREATE INDEX ON :DecisionContext(confidence)`, // 内部用：后台精炼管线筛选
+  `CREATE INDEX ON :DecisionContext(confidence)`,
 
   // ── AggregatedSummary ─────────────────────────
   `CREATE INDEX ON :AggregatedSummary(scope)`,
+
+  // ── Project ─────────────────────────────────
+  `CREATE INDEX ON :Project(name)`,
+]
+
+// ─────────────────────────────────────────────
+// 全文索引（Memgraph 3.6+ 原生支持）
+//
+// 查询方式：
+//   CALL text_search.search("idx_decision", "data.summary:退款") YIELD node, score
+//   CALL text_search.search_all("idx_decision", "退款") YIELD node, score
+// ─────────────────────────────────────────────
+
+const TEXT_INDEXES: string[] = [
+  // DecisionContext: 索引 summary 和 content，支持全文搜索决策
+  `CREATE TEXT INDEX idx_decision ON :DecisionContext(summary, content)`,
+
+  // CodeEntity: 索引 name，支持函数名/文件名模糊搜索
+  `CREATE TEXT INDEX idx_code ON :CodeEntity(name)`,
 ]
 
 // ─────────────────────────────────────────────
@@ -65,6 +81,11 @@ async function runSchemaSetup(): Promise<void> {
       await runSafe(session, cypher)
     }
 
+    console.log('\n🔍 创建全文索引...')
+    for (const cypher of TEXT_INDEXES) {
+      await runSafe(session, cypher)
+    }
+
     console.log('\n✅ Schema 初始化完成\n')
     await printSchemaStats(session)
   } finally {
@@ -76,7 +97,7 @@ async function runSchemaSetup(): Promise<void> {
 async function runSafe(session: Session, cypher: string): Promise<void> {
   try {
     await session.run(cypher)
-    const label = cypher.slice(0, 60).replace(/\n/g, ' ').trim()
+    const label = cypher.slice(0, 70).replace(/\n/g, ' ').trim()
     console.log(`  ✓ ${label}...`)
   } catch (err: any) {
     if (
@@ -84,10 +105,10 @@ async function runSafe(session: Session, cypher: string): Promise<void> {
       err.message?.includes('index already exists') ||
       err.message?.includes('Unable to create')
     ) {
-      const label = cypher.slice(0, 50).replace(/\n/g, ' ').trim()
+      const label = cypher.slice(0, 60).replace(/\n/g, ' ').trim()
       console.log(`  ⚠ 已存在，跳过: ${label}...`)
     } else {
-      console.error(`  ✗ 失败: ${cypher.slice(0, 60)}`)
+      console.error(`  ✗ 失败: ${cypher.slice(0, 70)}`)
       console.error(`    ${err.message}`)
     }
   }
@@ -99,12 +120,12 @@ async function printSchemaStats(session: Session): Promise<void> {
     const result = await session.run('SHOW INDEX INFO')
     console.log(`  索引数量: ${result.records.length}`)
     for (const record of result.records) {
-      const label = record.get('label') || record.get('Label') || ''
-      const prop = record.get('property') || record.get('Property') || ''
-      console.log(`    - :${label}(${prop})`)
+      const keys = record.keys as unknown as string[]
+      const fields = keys.map(k => `${k}=${record.get(k)}`).join(', ')
+      console.log(`    - ${fields}`)
     }
   } catch {
-    // 不同版本语法可能不同，不影响主流程
+    console.log('  (无法读取索引详情，不影响功能)')
   }
 }
 

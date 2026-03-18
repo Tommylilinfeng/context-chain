@@ -1,6 +1,6 @@
 services:
   memgraph:
-    image: memgraph/memgraph:2.18.1
+    image: memgraph/memgraph-mage
     container_name: ckg-memgraph
     ports:
       - "7687:7687"
@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   memgraph-lab:
-    image: memgraph/lab:2.15.0
+    image: memgraph/lab
     container_name: ckg-memgraph-lab
     ports:
       - "3000:3000"

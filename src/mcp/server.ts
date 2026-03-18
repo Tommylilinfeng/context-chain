@@ -171,37 +171,27 @@ server.tool(
   async ({ name, type }) => {
     const session = await getSession()
     try {
-      // 先查精确锚定的决策（ANCHORED_TO）
-      const exactResult = await session.run(
-        `MATCH (d:DecisionContext)-[:ANCHORED_TO]->(ce:CodeEntity {name: $name})
+      // 合并查询：精确锚定 + 模糊锚定一次查完
+      const result = await session.run(
+        `MATCH (d:DecisionContext)-[r:ANCHORED_TO|APPROXIMATE_TO]->(ce:CodeEntity {name: $name})
          WHERE d.staleness = 'active'
          ${type ? 'AND ce.entity_type = $type' : ''}
          RETURN d.summary AS summary, d.content AS content, d.keywords AS keywords,
-                d.owner AS owner, d.created_at AS created_at, ce.name AS anchor
-         ORDER BY d.created_at DESC
-         LIMIT 10`,
+                d.owner AS owner, d.created_at AS created_at, ce.name AS anchor,
+                type(r) AS match_type
+         ORDER BY CASE type(r) WHEN 'ANCHORED_TO' THEN 0 ELSE 1 END, d.created_at DESC
+         LIMIT 15`,
         { name, type: type ?? null }
       )
 
-      // 再查模糊锚定的决策（APPROXIMATE_TO）
-      const approxResult = await session.run(
-        `MATCH (d:DecisionContext)-[:APPROXIMATE_TO]->(ce:CodeEntity {name: $name})
-         WHERE d.staleness = 'active'
-         RETURN d.summary AS summary, d.content AS content, d.keywords AS keywords,
-                d.owner AS owner, d.created_at AS created_at, ce.name AS anchor
-         ORDER BY d.created_at DESC
-         LIMIT 5`,
-        { name }
-      )
-
-      const exact = exactResult.records
-      const approx = approxResult.records
-
-      if (exact.length === 0 && approx.length === 0) {
+      if (result.records.length === 0) {
         return {
           content: [{ type: 'text', text: `暂无 "${name}" 相关的设计决策记录。` }],
         }
       }
+
+      const exact = result.records.filter(r => r.get('match_type') === 'ANCHORED_TO')
+      const approx = result.records.filter(r => r.get('match_type') === 'APPROXIMATE_TO')
 
       const lines: string[] = [`💡 "${name}" 相关设计决策\n`]
 
@@ -221,6 +211,77 @@ server.tool(
           lines.push(`\n▶ ${r.get('summary')}`)
           lines.push(`  ${r.get('content')}`)
         }
+      }
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    } finally {
+      await session.close()
+    }
+  }
+)
+
+// ─────────────────────────────────────────────────────────
+// 工具 5：get_cross_repo_dependencies
+// 查跨 repo / 跨服务的依赖关系
+// ─────────────────────────────────────────────────────────
+
+server.tool(
+  'get_cross_repo_dependencies',
+  '查询跨 repo 和跨服务的依赖关系。显示哪些 repo 之间有代码调用或 API 调用关系。',
+  {
+    repo: z.string().optional().describe('指定某个 repo 名，查它的所有跨 repo 依赖。不指定则查全部。'),
+  },
+  async ({ repo }) => {
+    const session = await getSession()
+    try {
+      const lines: string[] = ['🌐 跨 Repo 依赖关系\n']
+
+      // 1. 代码级别的跨 repo 调用（CALLS_CROSS_REPO）
+      const codeResult = await session.run(
+        repo
+          ? `MATCH (caller:CodeEntity)-[r:CALLS_CROSS_REPO]->(callee:CodeEntity)
+             WHERE caller.repo = $repo OR callee.repo = $repo
+             RETURN caller.repo AS from_repo, caller.name AS caller_name,
+                    callee.repo AS to_repo, callee.name AS callee_name, r.package AS package
+             ORDER BY from_repo, to_repo`
+          : `MATCH (caller:CodeEntity)-[r:CALLS_CROSS_REPO]->(callee:CodeEntity)
+             RETURN caller.repo AS from_repo, caller.name AS caller_name,
+                    callee.repo AS to_repo, callee.name AS callee_name, r.package AS package
+             ORDER BY from_repo, to_repo`,
+        repo ? { repo } : {}
+      )
+
+      if (codeResult.records.length > 0) {
+        lines.push(`── 代码调用（${codeResult.records.length} 条）──`)
+        for (const r of codeResult.records) {
+          lines.push(`  ${r.get('from_repo')}::${r.get('caller_name')}() → ${r.get('to_repo')}::${r.get('callee_name')}()`)
+        }
+      }
+
+      // 2. 服务级别的 API 依赖（DEPENDS_ON_API）
+      const apiResult = await session.run(
+        repo
+          ? `MATCH (from:CodeEntity)-[r:DEPENDS_ON_API]->(to:CodeEntity)
+             WHERE from.name = $repo OR to.name = $repo
+             RETURN from.name AS from_repo, to.name AS to_repo,
+                    r.connection_type AS conn_type, r.description AS description
+             ORDER BY from_repo`
+          : `MATCH (from:CodeEntity)-[r:DEPENDS_ON_API]->(to:CodeEntity)
+             RETURN from.name AS from_repo, to.name AS to_repo,
+                    r.connection_type AS conn_type, r.description AS description
+             ORDER BY from_repo`,
+        repo ? { repo } : {}
+      )
+
+      if (apiResult.records.length > 0) {
+        lines.push(`\n── API/服务依赖（${apiResult.records.length} 条）──`)
+        for (const r of apiResult.records) {
+          lines.push(`  ${r.get('from_repo')} → ${r.get('to_repo')} [${r.get('conn_type')}]: ${r.get('description')}`)
+        }
+      }
+
+      if (codeResult.records.length === 0 && apiResult.records.length === 0) {
+        lines.push('暂无跨 repo 依赖记录。请先运行 link:repos 和 link:services。')
       }
 
       return { content: [{ type: 'text', text: lines.join('\n') }] }

@@ -3,18 +3,20 @@
  *
  * 用法：
  *   joern --script joern/extract-code-entities.sc \
- *         --param cpgFile=/Users/zhouyitong/dev/bite/bite-me-website.cpg.bin \
- *         --param outFile=/Users/zhouyitong/dev/context-knowledge-graph/data/bite.json
+ *         --param cpgFile=/path/to/repo.cpg.bin \
+ *         --param outFile=/path/to/context-knowledge-graph/data/output.json \
+ *         --param repoName=my-repo
  */
 
 @main def extractCodeEntities(
   cpgFile: String,
-  outFile: String
+  outFile: String,
+  repoName: String = "bite-me-website"
 ) = {
 
   importCpg(cpgFile)
 
-  val repo = "bite-me-website"
+  val repo = repoName
   val nodes = scala.collection.mutable.ArrayBuffer[ujson.Value]()
   val calls = scala.collection.mutable.ArrayBuffer[ujson.Value]()
 

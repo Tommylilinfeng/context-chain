@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CKG Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+    .card-header { border-bottom: 1px solid #334155; padding: 16px 20px; font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+    .badge-blue { background: #1e3a5f; color: #60a5fa; }
+    .badge-green { background: #14532d; color: #4ade80; }
+    .badge-yellow { background: #422006; color: #fbbf24; }
+    .badge-red { background: #450a0a; color: #f87171; }
+    .badge-purple { background: #3b0764; color: #c084fc; }
+    .tab-active { border-bottom: 2px solid #60a5fa; color: #60a5fa; }
+    .tab-inactive { color: #94a3b8; cursor: pointer; }
+    .tab-inactive:hover { color: #e2e8f0; }
+    .input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; width: 100%; }
+    .input:focus { outline: none; border-color: #60a5fa; }
+    .btn { padding: 8px 16px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: none; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .btn-ghost:hover { background: #1e293b; color: #e2e8f0; }
+    textarea.input { min-height: 100px; resize: vertical; }
+    .coverage-bar { height: 6px; border-radius: 3px; background: #334155; overflow: hidden; }
+    .coverage-fill { height: 100%; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+      return res.json();
+    }
+
+    function StatsPanel() {
+      const [stats, setStats] = useState(null);
+      const [repos, setRepos] = useState([]);
+      useEffect(() => { api('/api/stats').then(setStats); api('/api/repos').then(setRepos); }, []);
+      if (!stats) return React.createElement('div', {className:'text-center py-12 text-gray-400'}, '加载中...');
+      const d = stats.decisions;
+      return React.createElement('div', null,
+        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '📊 图谱概览'),
+        React.createElement('div', {className:'grid grid-cols-4 gap-4 mb-8'},
+          [['代码实体', stats.entities.reduce((s,e)=>s+e.count,0), 'text-blue-400'],
+           ['决策记录', d.total, 'text-green-400'],
+           ['已锚定', d.anchored, 'text-yellow-400'],
+           ['业务上下文', d.business, 'text-purple-400']
+          ].map(([label,val,color]) =>
+            React.createElement('div', {key:label, className:'card p-5'},
+              React.createElement('div', {className:'text-3xl font-bold '+color}, val),
+              React.createElement('div', {className:'text-sm text-gray-400 mt-1'}, label)
+            )
+          )
+        ),
+        React.createElement('div', {className:'card mb-6'},
+          React.createElement('div', {className:'card-header'}, 'Repos'),
+          React.createElement('div', {className:'p-4'},
+            repos.map(r => React.createElement('div', {key:r.repo, className:'flex items-center justify-between py-3 border-b border-gray-700'},
+              React.createElement('span', {className:'font-medium'}, r.repo),
+              React.createElement('div', {className:'flex gap-3'},
+                React.createElement('span', {className:'badge badge-blue'}, r.entities+' 实体'),
+                React.createElement('span', {className:'badge badge-green'}, r.decisions+' 决策')
+              )
+            ))
+          )
+        ),
+        React.createElement('div', {className:'grid grid-cols-2 gap-4'},
+          React.createElement('div', {className:'card'},
+            React.createElement('div', {className:'card-header'}, '实体类型'),
+            React.createElement('div', {className:'p-4'},
+              stats.entities.map(e => React.createElement('div', {key:e.type, className:'flex justify-between py-1.5'},
+                React.createElement('span', {className:'text-gray-300'}, e.type),
+                React.createElement('span', {className:'font-mono text-gray-400'}, e.count)
+              ))
+            )
+          ),
+          React.createElement('div', {className:'card'},
+            React.createElement('div', {className:'card-header'}, '关系类型'),
+            React.createElement('div', {className:'p-4'},
+              stats.edges.map(e => React.createElement('div', {key:e.type, className:'flex justify-between py-1.5'},
+                React.createElement('span', {className:'text-gray-300'}, e.type),
+                React.createElement('span', {className:'font-mono text-gray-400'}, e.count)
+              ))
+            )
+          )
+        )
+      );
+    }
+
+    function BusinessContext() {
+      const [items, setItems] = useState([]);
+      const [editing, setEditing] = useState(null);
+      const [form, setForm] = useState({summary:'',content:'',keywords:'',scope:''});
+      const load = useCallback(() => { api('/api/business-context').then(setItems); }, []);
+      useEffect(load, []);
+      const save = async () => {
+        await api('/api/business-context', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: editing === '__new__' ? undefined : editing, summary:form.summary, content:form.content,
+            keywords:form.keywords.split(',').map(k=>k.trim()).filter(Boolean),
+            scope:form.scope.split(',').map(s=>s.trim()).filter(Boolean) })
+        });
+        setEditing(null); setForm({summary:'',content:'',keywords:'',scope:''}); load();
+      };
+      const del = async (id) => { if(!confirm('确定删除？'))return; await api('/api/business-context/'+encodeURIComponent(id),{method:'DELETE'}); load(); };
+      const startEdit = (item) => { setEditing(item.id); setForm({summary:item.summary,content:item.content,keywords:(item.keywords||[]).join(', '),scope:(item.scope||[]).join(', ')}); };
+      const startNew = () => { setEditing('__new__'); setForm({summary:'',content:'',keywords:'',scope:''}); };
+
+      return React.createElement('div', null,
+        React.createElement('div', {className:'flex items-center justify-between mb-6'},
+          React.createElement('div', null,
+            React.createElement('h2', {className:'text-xl font-bold'}, '📝 业务上下文'),
+            React.createElement('p', {className:'text-sm text-gray-400 mt-1'}, '在 cold-start 之前写入业务逻辑描述，让决策提取更准确')
+          ),
+          React.createElement('button', {className:'btn btn-primary', onClick:startNew}, '+ 新建')
+        ),
+        editing && React.createElement('div', {className:'card mb-6 p-5'},
+          React.createElement('div', {className:'space-y-4'},
+            React.createElement('div', null,
+              React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '标题'),
+              React.createElement('input', {className:'input', value:form.summary, onChange:e=>setForm({...form,summary:e.target.value}), placeholder:'如：订单流程的核心逻辑和约束'})
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '详细描述'),
+              React.createElement('textarea', {className:'input', value:form.content, onChange:e=>setForm({...form,content:e.target.value}), rows:8, placeholder:'详细描述业务逻辑、约束条件、决策原因...'})
+            ),
+            React.createElement('div', {className:'grid grid-cols-2 gap-4'},
+              React.createElement('div', null,
+                React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '关键词（逗号分隔）'),
+                React.createElement('input', {className:'input', value:form.keywords, onChange:e=>setForm({...form,keywords:e.target.value}), placeholder:'订单, 支付, 优惠券'})
+              ),
+              React.createElement('div', null,
+                React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '关联 Repo（逗号分隔）'),
+                React.createElement('input', {className:'input', value:form.scope, onChange:e=>setForm({...form,scope:e.target.value}), placeholder:'bite-me-website, biteme-shared'})
+              )
+            ),
+            React.createElement('div', {className:'flex gap-2 justify-end'},
+              React.createElement('button', {className:'btn btn-ghost', onClick:()=>setEditing(null)}, '取消'),
+              React.createElement('button', {className:'btn btn-primary', onClick:save, disabled:!form.summary||!form.content}, '保存')
+            )
+          )
+        ),
+        items.length === 0 && !editing ?
+          React.createElement('div', {className:'card p-12 text-center text-gray-400'},
+            React.createElement('p', {className:'text-lg mb-2'}, '还没有业务上下文'),
+            React.createElement('p', {className:'text-sm'}, '点击"新建"开始描述你的业务逻辑')
+          ) :
+          React.createElement('div', {className:'space-y-3'},
+            items.map(item => React.createElement('div', {key:item.id, className:'card p-4'},
+              React.createElement('div', {className:'flex items-start justify-between'},
+                React.createElement('div', {className:'flex-1'},
+                  React.createElement('div', {className:'font-medium mb-1'}, item.summary),
+                  React.createElement('div', {className:'text-sm text-gray-400 whitespace-pre-wrap'}, item.content),
+                  React.createElement('div', {className:'flex gap-2 mt-2 flex-wrap'},
+                    (item.keywords||[]).map(k => React.createElement('span', {key:k, className:'badge badge-blue'}, k)),
+                    (item.scope||[]).map(s => React.createElement('span', {key:s, className:'badge badge-purple'}, s))
+                  )
+                ),
+                React.createElement('div', {className:'flex gap-2 ml-4'},
+                  React.createElement('button', {className:'btn btn-ghost text-sm', onClick:()=>startEdit(item)}, '编辑'),
+                  React.createElement('button', {className:'btn btn-danger text-sm', onClick:()=>del(item.id)}, '删除')
+                )
+              )
+            ))
+          )
+      );
+    }
+
+    function Decisions() {
+      const [decisions, setDecisions] = useState([]);
+      const [query, setQuery] = useState('');
+      const [repoFilter, setRepoFilter] = useState('');
+      const [repos, setRepos] = useState([]);
+      useEffect(() => { api('/api/repos').then(setRepos); }, []);
+      const search = useCallback(() => {
+        const p = new URLSearchParams(); if(query) p.set('q',query); if(repoFilter) p.set('repo',repoFilter);
+        api('/api/decisions?'+p).then(setDecisions);
+      }, [query, repoFilter]);
+      useEffect(search, [repoFilter]);
+      const srcLabel = s => ({cold_start:'冷启动',claude_code_session:'Session',manual_business_context:'业务上下文'}[s]||s);
+      const srcBadge = s => ({cold_start:'badge-yellow',claude_code_session:'badge-blue',manual_business_context:'badge-green'}[s]||'badge-blue');
+
+      return React.createElement('div', null,
+        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '💡 决策浏览器'),
+        React.createElement('div', {className:'flex gap-3 mb-6'},
+          React.createElement('input', {className:'input flex-1', value:query, onChange:e=>setQuery(e.target.value), onKeyDown:e=>{if(e.key==='Enter')search()}, placeholder:'搜索决策...'}),
+          React.createElement('select', {className:'input', style:{width:'auto'}, value:repoFilter, onChange:e=>setRepoFilter(e.target.value)},
+            React.createElement('option', {value:''}, '全部 Repo'),
+            repos.map(r => React.createElement('option', {key:r.repo, value:r.repo}, r.repo))
+          ),
+          React.createElement('button', {className:'btn btn-primary', onClick:search}, '搜索')
+        ),
+        React.createElement('div', {className:'text-sm text-gray-400 mb-3'}, decisions.length+' 条结果'),
+        React.createElement('div', {className:'space-y-3'},
+          decisions.map(d => React.createElement('div', {key:d.id, className:'card p-4'},
+            React.createElement('div', {className:'flex items-start justify-between mb-2'},
+              React.createElement('div', {className:'font-medium'}, d.summary),
+              React.createElement('span', {className:'badge '+srcBadge(d.source)}, srcLabel(d.source))
+            ),
+            React.createElement('div', {className:'text-sm text-gray-400 mb-2'}, d.content),
+            React.createElement('div', {className:'flex gap-2 flex-wrap'},
+              (d.keywords||[]).map(k => React.createElement('span', {key:k, className:'badge badge-blue text-xs'}, k)),
+              (d.anchors||[]).filter(Boolean).map(a => React.createElement('span', {key:a, className:'badge badge-yellow text-xs'}, '📎 '+a))
+            )
+          ))
+        )
+      );
+    }
+
+    function Coverage() {
+      const [repos, setRepos] = useState([]);
+      const [sel, setSel] = useState('');
+      const [data, setData] = useState(null);
+      useEffect(() => { api('/api/repos').then(r => { setRepos(r); if(r.length) setSel(r[0].repo); }); }, []);
+      useEffect(() => { if(sel) api('/api/coverage/'+sel).then(setData); }, [sel]);
+      const mx = data ? Math.max(...data.files.map(f=>f.decisions), ...data.sql.map(s=>s.decisions), 1) : 1;
+
+      const renderBar = (name, decisions, label) =>
+        React.createElement('div', {key:name, className:'flex items-center gap-3'},
+          label ? React.createElement('span', {className:'badge badge-purple text-xs w-20 text-center'}, label) : null,
+          React.createElement('div', {className:'w-48 text-sm truncate'}, name),
+          React.createElement('div', {className:'flex-1 coverage-bar'},
+            React.createElement('div', {className:'coverage-fill', style:{
+              width: Math.max((decisions/mx)*100, decisions>0?5:0)+'%',
+              background: decisions===0?'#ef4444':decisions<2?'#f59e0b':'#22c55e'
+            }})
+          ),
+          React.createElement('div', {className:'w-8 text-right text-sm font-mono text-gray-400'}, decisions)
+        );
+
+      return React.createElement('div', null,
+        React.createElement('div', {className:'flex items-center justify-between mb-6'},
+          React.createElement('h2', {className:'text-xl font-bold'}, '🗺️ 知识覆盖地图'),
+          React.createElement('select', {className:'input', style:{width:'auto'}, value:sel, onChange:e=>setSel(e.target.value)},
+            repos.map(r => React.createElement('option', {key:r.repo, value:r.repo}, r.repo))
+          )
+        ),
+        data && React.createElement('div', null,
+          data.files.length > 0 && React.createElement('div', {className:'card mb-6'},
+            React.createElement('div', {className:'card-header'}, '📁 文件 ('+data.files.length+') ',
+              React.createElement('span', {className:'text-sm text-gray-400'}, data.files.filter(f=>f.decisions===0).length+' 个无覆盖')
+            ),
+            React.createElement('div', {className:'p-4 space-y-2'}, data.files.map(f => renderBar(f.name, f.decisions)))
+          ),
+          data.sql.length > 0 && React.createElement('div', {className:'card'},
+            React.createElement('div', {className:'card-header'}, '🗄️ SQL ('+data.sql.length+') ',
+              React.createElement('span', {className:'text-sm text-gray-400'}, data.sql.filter(s=>s.decisions===0).length+' 个无覆盖')
+            ),
+            React.createElement('div', {className:'p-4 space-y-2'}, data.sql.map(s => renderBar(s.name, s.decisions, s.type)))
+          )
+        )
+      );
+    }
+
+    function Graph() {
+      const [data, setData] = useState(null);
+      useEffect(() => { api('/api/graph').then(setData); }, []);
+      if (!data) return React.createElement('div', {className:'text-center py-12 text-gray-400'}, '加载中...');
+      const W=800, H=400, cx=W/2, cy=H/2, rad=140;
+      const pos = data.nodes.map((n,i) => {
+        const a = (2*Math.PI*i)/data.nodes.length - Math.PI/2;
+        return {...n, x:cx+rad*Math.cos(a), y:cy+rad*Math.sin(a)};
+      });
+      const nm = {}; pos.forEach(n => nm[n.id]=n);
+      const col = id => id.includes('website')?'#60a5fa':id.includes('shared')?'#c084fc':id.includes('infra')?'#fbbf24':'#4ade80';
+
+      return React.createElement('div', null,
+        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '🌐 跨服务依赖图'),
+        React.createElement('div', {className:'card p-4'},
+          React.createElement('svg', {width:W, height:H, viewBox:'0 0 '+W+' '+H},
+            React.createElement('defs', null,
+              React.createElement('marker', {id:'arr', viewBox:'0 0 10 6', refX:10, refY:3, markerWidth:10, markerHeight:6, orient:'auto-start-reverse'},
+                React.createElement('path', {d:'M 0 0 L 10 3 L 0 6', fill:'#64748b'})
+              ),
+              React.createElement('marker', {id:'arr2', viewBox:'0 0 10 6', refX:10, refY:3, markerWidth:10, markerHeight:6, orient:'auto-start-reverse'},
+                React.createElement('path', {d:'M 0 0 L 10 3 L 0 6', fill:'#f59e0b'})
+              )
+            ),
+            data.edges.map((e,i) => {
+              const f=nm[e.from], t=nm[e.to]; if(!f||!t) return null;
+              const dx=t.x-f.x, dy=t.y-f.y, dist=Math.sqrt(dx*dx+dy*dy), r=36;
+              const sx=f.x+(dx/dist)*r, sy=f.y+(dy/dist)*r, ex=t.x-(dx/dist)*r, ey=t.y-(dy/dist)*r;
+              const isApi = e.type==='api';
+              return React.createElement('g', {key:i},
+                React.createElement('line', {x1:sx,y1:sy,x2:ex,y2:ey, stroke:isApi?'#f59e0b':'#64748b', strokeWidth:isApi?2:1.5, strokeDasharray:isApi?'6 3':'none', markerEnd:isApi?'url(#arr2)':'url(#arr)'}),
+                e.weight && React.createElement('text', {x:(sx+ex)/2, y:(sy+ey)/2-8, textAnchor:'middle', fill:'#94a3b8', fontSize:11}, e.weight)
+              );
+            }),
+            pos.map(n => React.createElement('g', {key:n.id},
+              React.createElement('circle', {cx:n.x, cy:n.y, r:32, fill:col(n.id), fillOpacity:0.15, stroke:col(n.id), strokeWidth:2}),
+              React.createElement('text', {x:n.x, y:n.y+1, textAnchor:'middle', fill:col(n.id), fontSize:11, fontWeight:600}, n.id.replace('biteme-','').replace('bite-me-','')),
+              React.createElement('text', {x:n.x, y:n.y+50, textAnchor:'middle', fill:'#94a3b8', fontSize:10}, n.size+' 实体')
+            ))
+          ),
+          React.createElement('div', {className:'flex gap-6 mt-4 justify-center text-sm text-gray-400'},
+            React.createElement('div', {className:'flex items-center gap-2'},
+              React.createElement('div', {style:{width:24,height:2,background:'#64748b'}}), '代码调用'),
+            React.createElement('div', {className:'flex items-center gap-2'},
+              React.createElement('div', {style:{width:24,height:0,borderTop:'2px dashed #f59e0b'}}), 'API 依赖')
+          )
+        ),
+        React.createElement('div', {className:'card mt-4'},
+          React.createElement('div', {className:'card-header'}, '连接详情'),
+          React.createElement('div', {className:'p-4 space-y-2'},
+            data.edges.map((e,i) => React.createElement('div', {key:i, className:'flex items-center gap-2 text-sm flex-wrap'},
+              React.createElement('span', {className:'font-medium'}, e.from), ' → ',
+              React.createElement('span', {className:'font-medium'}, e.to),
+              React.createElement('span', {className:'badge '+(e.type==='api'?'badge-yellow':'badge-blue')}, e.type==='api'?'API':e.weight+' calls'),
+              (e.descriptions||[]).map((d,j) => React.createElement('span', {key:j, className:'text-gray-400 text-xs'}, d))
+            ))
+          )
+        )
+      );
+    }
+
+    function App() {
+      const [tab, setTab] = useState('stats');
+      const tabs = [{id:'stats',label:'📊 概览'},{id:'business',label:'📝 业务上下文'},{id:'decisions',label:'💡 决策'},{id:'coverage',label:'🗺️ 覆盖'},{id:'graph',label:'🌐 依赖图'}];
+      return React.createElement('div', {className:'max-w-5xl mx-auto px-6 py-8'},
+        React.createElement('div', {className:'mb-8'},
+          React.createElement('h1', {className:'text-2xl font-bold'}, 'Context Knowledge Graph'),
+          React.createElement('p', {className:'text-sm text-gray-400 mt-1'}, 'grep 找的是代码写了什么，我们记录的是代码为什么这样写')
+        ),
+        React.createElement('div', {className:'flex gap-6 border-b border-gray-700 mb-8'},
+          tabs.map(t => React.createElement('button', {key:t.id, className:'pb-3 text-sm font-medium '+(tab===t.id?'tab-active':'tab-inactive'), onClick:()=>setTab(t.id)}, t.label))
+        ),
+        tab==='stats' && React.createElement(StatsPanel),
+        tab==='business' && React.createElement(BusinessContext),
+        tab==='decisions' && React.createElement(Decisions),
+        tab==='coverage' && React.createElement(Coverage),
+        tab==='graph' && React.createElement(Graph)
+      );
+    }
+    ReactDOM.render(React.createElement(App), document.getElementById('root'));
+  </script>
+</body>
+</html>
