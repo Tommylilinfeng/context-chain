@@ -1,305 +1,269 @@
-# decision-graph
+# Context Knowledge Graph (CKG)
 
-> **grep finds what code does. We record why it was written that way.**
-
-A local-first knowledge graph that automatically extracts design decisions from AI coding sessions (Claude Code, Cursor, etc.) and serves them back to your coding AI through MCP — so the next person (or future you) knows *why* the code is the way it is.
+> **grep 找的是代码写了什么，我们记录的是代码为什么这样写。**
 
 ---
 
-## The Problem
+## 为什么你需要这个
 
-In the AI-coding era, a developer + AI can independently build an entire microservice. But the design decisions — *why* approach A was chosen over B, what trade-offs were considered, what was rejected and why — live only in the AI chat window and disappear when it closes.
+**你的 AI agent 半夜闲着，你的 subscription 在浪费。** CKG 让你的 agent 在你睡觉的时候持续工作——分析代码、提取决策、构建知识图谱。所有 pipeline 走 `claude -p`（Claude Code CLI），用的是你已有的 subscription，不需要 API key，不额外花钱。一夜之间，你的整个代码库的设计决策就被自动提取并结构化了。
 
-Three months later, no one (including you) can answer: "Why was it written this way?"
+**CKG 的核心是一个 context 仓库，不是一个分析工具。** 我们自带了多条 ingestion pipeline（从代码分析、AI 对话记录、会议纪要等渠道自动提取 context），但这些只是入口。CKG 的真正价值是：**一个统一的、结构化的、可被任何 AI agent 查询的知识存储层。** 你可以把任何非标的 context 挂进来——架构决策、产品需求、技术选型理由、踩过的坑——通过 MCP 协议，所有 coding AI 都能在写代码时自动获取这些上下文。
 
-## What decision-graph Does
-
-1. **Extracts decisions** from your code and AI conversation history
-2. **Stores them** in a knowledge graph anchored to your codebase
-3. **Serves them** to Claude Code / Cursor via MCP when you're working on related code
+我们想成为每个开发者都会用的 AI context 仓库。
 
 ---
 
-## Quick Start
+## 它解决什么问题
 
-### Prerequisites
+在 AI 写代码的时代，开发者与 AI 的对话中包含大量决策理由——为什么选方案 A 而不是 B、当时还考虑过什么、这个 trade-off 是什么。但这些信息随着对话窗口关闭永久丢失。
 
-| Tool | Required | Purpose |
-|------|----------|---------|
-| [Node.js](https://nodejs.org/) 18+ | ✅ | Runtime |
-| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | ✅ | Runs Memgraph (graph database) |
-| [Joern](https://joern.io/) | Optional | Code structure analysis (function call graphs) |
-| [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) | Optional | Decision extraction from code |
+新功能、新成员、甚至三个月后的自己，都无法知道"为什么这样写"。
 
-### Install
-
-```bash
-git clone https://github.com/Tommylilinfeng/decision-graph.git
-cd decision-graph
-bash scripts/setup.sh
-```
-
-The setup script will:
-- Check prerequisites
-- Install npm dependencies (root + dashboard)
-- Pull Docker images (~2GB for Memgraph)
-
-### Install Joern (optional)
-
-```bash
-# macOS
-brew install joern
-
-# Linux
-curl -L https://github.com/joernio/joern/releases/latest/download/joern-install.sh | bash
-```
-
-### Start the Dashboard
-
-```bash
-cd dashboard
-npm run dev
-```
-
-Open **http://localhost:3001** — you'll see the project management interface.
-
-### Create a Project
-
-1. Click **"+ New Project"**
-2. Enter a project name
-3. Add your code repositories (paste path or use the file browser)
-4. The system auto-detects: language, project type, logic directories, database code
-5. Confirm and create
-6. Click **"🚀 Initialize"** on the project page
-
-Initialization runs these pipelines automatically:
-- **Start Memgraph** — spins up an isolated Docker container for this project
-- **Initialize Schema** — creates graph indexes and constraints
-- **Generate Code Structure** — runs Joern to build function call graphs (if Joern installed)
-- **Cold Start** — reads your code files, uses Claude to extract design decisions
-- **Session Ingestion** — extracts decisions from your Claude Code conversation history
+CKG 把这些散落的决策自动提取、存储为知识图谱，并通过 MCP 协议喂给 Claude Code / Cursor，让 AI 在写代码时知道"这里为什么这样设计"。
 
 ---
 
-## Architecture
+## 架构概览
 
 ```
-Your Code Repos
+你的代码仓库
     │
-    ├── Joern (CPG analysis)            → CodeEntity nodes + CALLS/CONTAINS edges
-    ├── Cold-start pipeline             → DecisionContext nodes (from code analysis)
-    └── Session ingestion pipeline      → DecisionContext nodes (from AI chat history)
-                    ↓
-              Memgraph (graph database, one instance per project)
-                    ↓
-              MCP Server (4 tools)
-                    ↓
-        Claude Code / Cursor gets context while you code
+    ├── Joern (CPG 静态分析)
+    │       └── CodeEntity 节点 + CALLS/CONTAINS 边
+    │
+    ├── Cold-start pipeline (4 轮，可半夜自动跑)
+    │       ├── Round 1: LLM 选相关文件
+    │       ├── Round 2: 每个文件筛选值得分析的函数
+    │       ├── Round 3: 每个函数独立深度分析 + 分类
+    │       └── Round 4: 决策分组 → 关系边 + 关键词归一化
+    │
+    ├── Session ingestion pipeline
+    │       └── 读 ~/.claude/projects/*.jsonl → 提取决策
+    │
+    └── 手动录入 / 任何自定义来源
+            └── Business Context、架构说明、产品需求...
+                        ↓
+                  Memgraph 图数据库 (context 仓库)
+                        ↓
+                  MCP Server → Claude Code / Cursor 自动获取上下文
 ```
-
-### Dashboard
-
-The Next.js dashboard (`localhost:3001`) manages everything:
-
-- **Projects** — each project gets its own Memgraph instance (full isolation)
-- **Repository scanning** — auto-detects language, type, DB code
-- **Initialization** — one-click pipeline with real-time progress
-- **Decisions browser** — search and browse all extracted decisions
-- **Coverage map** — see which files have decision coverage and which don't
-- **MCP config** — copy-paste config for connecting Claude Code
-
-### Data Model
-
-```
-CodeEntity        — Code structure: service / file / function / api_endpoint
-DecisionContext   — Design decisions: why, trade-offs, alternatives considered
-AggregatedSummary — Rollup summaries (generated by refinement pipeline)
-```
-
-Edges:
-```
-CONTAINS          — service → file → function
-CALLS             — function calls function
-ANCHORED_TO       — decision → code entity (precise)
-APPROXIMATE_TO    — decision → code entity (fuzzy)
-```
-
-### MCP Tools (what Claude Code can query)
-
-| Tool | Description |
-|------|-------------|
-| `get_code_structure` | What functions are in this file/service? |
-| `get_callers` | Who calls this function? (upstream dependencies) |
-| `get_callees` | What does this function call? (downstream dependencies) |
-| `get_context_for_code` | What design decisions are behind this file/function? |
 
 ---
 
-## Connect Claude Code to Your Project
+## 两种使用方式
 
-After initialization, go to **Settings** tab in the Dashboard and copy the MCP config into your repo's `.mcp.json`:
+### 1. 自动提取（用我们的 pipeline）
+
+```bash
+# 半夜跑：分析整个代码库，提取设计决策
+npm run cold-start:v2 -- --goal "全部功能" --owner me --force
+
+# 增量跑：只分析改动过的文件
+npm run cold-start:v2 -- --goal "订单和支付"
+
+# 从 Claude Code 对话记录提取
+npm run ingest:sessions
+```
+
+### 2. 手动录入（挂任何 context）
+
+通过 Dashboard 或直接写入 Memgraph，把任何你觉得重要的 context 挂到代码节点上：
+
+- 架构决策文档
+- 产品需求和 spec
+- 技术选型理由
+- 踩坑记录
+- 会议讨论结论
+
+消费端（MCP）不区分 context 来源。AI 只看"对当前任务有没有用"。
+
+---
+
+## 技术栈
+
+| 组件 | 技术 | 用途 |
+|------|------|------|
+| 图数据库 | Memgraph | 存储代码结构 + 决策节点（context 仓库） |
+| 可视化 | Memgraph Lab | 图谱浏览和查询 |
+| 代码分析 | Joern | 生成 CPG（代码属性图） |
+| 决策提取 | `claude -p`（subscription） | 从代码和对话中提取决策 |
+| MCP Server | TypeScript + `@modelcontextprotocol/sdk` | 对外暴露查询接口 |
+| 运行时 | Node.js / TypeScript | 所有脚本和服务 |
+| 容器 | Docker Compose | Memgraph + Lab |
+
+---
+
+## 数据模型
+
+### 节点类型
+
+```
+CodeEntity        — 代码实体：service / file / function / api_endpoint
+DecisionContext   — 设计决策：为什么这样写、当时考虑过什么、trade-off 是什么
+AggregatedSummary — 聚合摘要（后台精炼生成，暂未实现）
+```
+
+### 边类型
+
+```
+# 代码结构（来自 Joern）
+CONTAINS          — 服务→文件→函数
+CALLS             — 函数调用函数
+DEPENDS_ON_API    — 跨服务 API 依赖（LLM 推断）
+
+# 决策锚定
+ANCHORED_TO       — DecisionContext → CodeEntity（精确）
+APPROXIMATE_TO    — DecisionContext → CodeEntity（模糊）
+
+# 决策关系
+CAUSED_BY         — 决策 A 是因为决策 B
+DEPENDS_ON        — 决策 A 依赖决策 B 成立
+CONFLICTS_WITH    — 决策 A 和 B 有张力/trade-off
+CO_DECIDED        — 同一次决策中一起做出的
+```
+
+---
+
+## Cold-start Pipeline（4 轮）
+
+**Round 1 — 选文件：** 给一个 goal（如"订单和支付"），LLM 从 CPG 的文件列表中选出相关文件。
+
+**Round 2 — 筛函数：** 每个文件一个 session。LLM 看完整代码 + CPG 依赖关系 + Business Context，判断哪些函数值得深入分析。
+
+**Round 3 — 深度分析：** 每个函数单独一个 session。LLM 看函数完整代码 + 所有 caller/callee 的完整代码（跨文件）+ Business Context，提取决策并分类（decision / suboptimal / bug）。
+
+**Round 4 — 关系和归一化：**
+- 4a: 一次 LLM 调用，把所有决策 summary + CPG 调用提示传入，返回相关决策的分组
+- 4b: 每个分组一次 LLM 调用，传入 full content，确定具体关系边（CAUSED_BY / DEPENDS_ON 等）
+- 关键词归一化: 一次轻量调用，合并同义词（"鉴权" = "auth" = "认证"）
+
+---
+
+## 可用命令
+
+```bash
+# 基础设施
+docker compose up -d           # 启动 Memgraph（http://localhost:3000 看图谱）
+npm run db:schema              # 初始化索引和约束
+npm run db:reset               # 清空图谱（谨慎）
+
+# 代码结构导入
+joern --script joern/extract-code-entities.sc \
+  --param cpgFile=path/to.cpg.bin \
+  --param outFile=data/output.json   # 从 CPG 提取代码结构
+
+npm run ingest:cpg -- --file data/output.json  # 导入代码结构
+
+# Cold-start（可半夜跑）
+npm run cold-start:v2 -- \
+  --goal "全部功能" \
+  --repo bite-me-website \
+  --owner me \
+  --force                       # 全量分析
+
+npm run cold-start:v2 -- \
+  --goal "订单和支付" \
+  --concurrency 3               # 增量分析，3 并发
+
+# Session 摄入
+npm run ingest:sessions         # 从 Claude Code 对话记录提取决策
+npm run ingest:sessions -- --project bite-me-website  # 指定项目
+
+# MCP Server
+npm run mcp                    # 启动（通常由 Claude Code 自动管理）
+
+# Dashboard
+npm run dashboard              # http://localhost:3001
+```
+
+---
+
+## MCP 工具（Claude Code 可调用）
+
+| 工具 | 说明 |
+|------|------|
+| `get_code_structure` | 查某个文件/服务下有哪些函数 |
+| `get_callers` | 查谁调用了某个函数（上游依赖） |
+| `get_callees` | 查某个函数调用了谁（下游依赖） |
+| `get_context_for_code` | 查某个文件/函数背后的设计决策 |
+| `get_cross_repo_dependencies` | 查跨 repo / 跨服务的依赖关系 |
+
+### 在业务 repo 里配置 MCP
+
+在 `your-repo/.mcp.json`（建议加入 `.gitignore`）：
 
 ```json
 {
   "mcpServers": {
-    "decision-graph": {
+    "context-knowledge-graph": {
       "command": "/bin/bash",
-      "args": ["/path/to/decision-graph/mcp-start.sh"],
-      "env": {
-        "CKG_MEMGRAPH_PORT": "7687"
-      }
+      "args": ["/path/to/context-knowledge-graph/mcp-start.sh"]
     }
   }
 }
 ```
 
-The exact config (with correct paths and ports) is shown in the Dashboard.
+---
+
+## 设计原则
+
+**1. 存储优先，pipeline 只是入口**
+CKG 是一个 context 仓库。自带的 pipeline 覆盖了常见的 ingestion 场景，但你可以把任何来源的 context 写进来。MCP 查询不关心 context 从哪来。
+
+**2. Subscription 友好，半夜跑**
+所有 LLM 调用走 `claude -p`，用你已有的 Claude Max subscription。Pipeline 设计为可以在低峰时段自动运行，充分利用你的 subscription 额度。
+
+**3. 消费端不区分来源**
+DecisionContext 不管来自 cold-start、session 摄入、手动录入还是 API 写入，MCP 查询结果一视同仁。`confidence` 字段仅供后台精炼管线内部使用。
+
+**4. 图谱是辅助，不是必要**
+所有摄入 pipeline 都会尝试查图谱获取调用上下文，但查不到不影响流程。
+
+**5. 状态追踪避免重复**
+增量分析只处理改动过的文件。`data/cold-start-state.json` 记录每个文件的分析状态。
 
 ---
 
-## Project Structure
+## 目录结构
 
 ```
-decision-graph/
-├── dashboard/                  # Next.js Dashboard (port 3001)
-│   ├── app/                    # Pages + API routes
-│   │   ├── page.tsx            # Home: project list
-│   │   ├── project/new/        # New project wizard
-│   │   ├── project/[id]/       # Project detail (tabs: overview/decisions/coverage/settings)
-│   │   └── api/                # REST APIs (projects, repos, scan, init, stats, decisions, coverage)
-│   └── lib/
-│       ├── db.ts               # SQLite for project metadata
-│       ├── docker.ts           # Docker Compose generation + container management
-│       ├── memgraph.ts         # Connect to project-specific Memgraph instance
-│       └── scanner.ts          # Auto-detect repo language, type, DB code
-│
-├── src/                        # Core pipelines + MCP server
-│   ├── db/
-│   │   ├── client.ts           # Memgraph connection (reads CKG_MEMGRAPH_PORT env var)
-│   │   ├── schema.ts           # Graph schema initialization
-│   │   └── graphContext.ts     # Shared graph query helpers
-│   ├── ingestion/
-│   │   ├── ingest-cpg.ts       # Import Joern CPG JSON → Memgraph
-│   │   ├── cold-start.ts       # Read code → Claude CLI → extract decisions
-│   │   └── ingest-sessions.ts  # Read ~/.claude/projects → extract decisions
-│   └── mcp/
-│       └── server.ts           # MCP Server (4 tools for Claude Code)
-│
+context-knowledge-graph/
+├── docker-compose.yml              # Memgraph + Memgraph Lab
+├── ckg.config.json                 # Repo 配置
+├── mcp-start.sh                    # MCP Server 启动脚本
 ├── joern/
-│   └── extract-code-entities.sc # Joern script: CPG → JSON
-│
-├── projects/                   # Per-project data (auto-generated)
-│   └── <project-id>/
-│       ├── docker-compose.yml  # Project's Memgraph instance
-│       └── data/               # CPG files, etc.
-│
-├── scripts/
-│   └── setup.sh                # One-command setup
-│
-├── docker-compose.yml          # Dev-mode Memgraph (standalone use)
-└── mcp-start.sh                # MCP Server launcher
+│   └── extract-code-entities.sc   # Joern 脚本：CPG → JSON
+├── data/
+│   ├── ingested-sessions.json     # 已处理 session 状态
+│   └── cold-start-state.json      # 增量分析状态
+└── src/
+    ├── prompts/
+    │   └── cold-start.ts          # 4 轮 prompt 模板
+    ├── db/
+    │   ├── client.ts              # Memgraph 连接
+    │   ├── schema.ts              # 索引 + 约束
+    │   ├── reset.ts               # 清空图谱
+    │   └── graphContext.ts        # 图谱上下文查询（共享模块）
+    ├── ingestion/
+    │   ├── cold-start-v2.ts       # 4 轮 pipeline
+    │   ├── ingest-cpg.ts          # CPG JSON → Memgraph
+    │   ├── ingest-sessions.ts     # Claude Code 对话 → 决策
+    │   ├── git-utils.ts           # git change detection
+    │   └── state.ts               # 增量分析状态
+    ├── mcp/
+    │   └── server.ts              # MCP Server（5 个工具）
+    └── dashboard/
+        ├── server.ts              # Dashboard API + SSE
+        └── public/                # Dashboard UI
 ```
 
 ---
 
-## Multi-Project Support
+## 下一步
 
-Each project gets:
-- Its own **Memgraph container** (fully isolated graph data)
-- Its own **port allocation** (Bolt: 7687+, Lab: 3002+)
-- Its own **docker-compose.yml** in `projects/<id>/`
-- Separate **decision extraction** per repo
-
-Projects are managed through the Dashboard. Project metadata (names, repo configs, ports) is stored in a local SQLite file (`ckg-meta.db`).
-
----
-
-## Tech Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Graph DB | [Memgraph](https://memgraph.com/) 3.7+ | Store code structure + decisions |
-| Graph Viz | Memgraph Lab | Browse the graph visually |
-| Code Analysis | [Joern](https://joern.io/) | Generate CPG (Code Property Graph) |
-| Decision Extraction | Claude CLI (`claude -p`) | Extract decisions from code and conversations |
-| MCP Server | TypeScript + `@modelcontextprotocol/sdk` | Serve context to Claude Code / Cursor |
-| Dashboard | Next.js 15 + Tailwind CSS 4 | Project management UI |
-| Metadata | SQLite (better-sqlite3) | Project configs, port allocation |
-| Container Mgmt | Docker Compose | Per-project Memgraph instances |
-
----
-
-## Running Pipelines Manually
-
-If you prefer CLI over the Dashboard:
-
-```bash
-# Set the port for the target project's Memgraph
-export CKG_MEMGRAPH_PORT=7687
-
-# Initialize schema
-npm run db:schema
-
-# Import code structure (requires Joern)
-joern-parse /path/to/repo -o data/repo.cpg.bin
-joern --script joern/extract-code-entities.sc \
-  --param cpgFile=data/repo.cpg.bin \
-  --param outFile=data/repo.json \
-  --param repoName=my-repo
-npm run ingest:cpg -- --file data/repo.json
-
-# Cold start (extract decisions from code)
-npm run cold-start -- \
-  --repo my-repo \
-  --src /path/to/repo/src \
-  --owner me \
-  --concurrency 10
-
-# Ingest Claude Code session history
-npm run ingest:sessions
-
-# Start MCP server (usually auto-managed by Claude Code)
-npm run mcp
-```
-
----
-
-## Design Philosophy
-
-1. **Decisions, not descriptions.** We capture *why* code was written this way, not *what* it does. The "what" is already in the code.
-
-2. **Local-first.** Everything runs on your machine. No cloud dependencies, no data leaving your laptop.
-
-3. **Graph is optional, not required.** All pipelines try to use the graph for context but work fine without it. You can start with zero data and build up.
-
-4. **Consumer-agnostic.** DecisionContext nodes don't know if they came from cold-start, session ingestion, or manual entry. The MCP server treats them equally.
-
-5. **Subscription, not API key.** Decision extraction uses `claude -p` (Claude CLI), which runs on your Claude Max subscription. No API costs.
-
----
-
-## Status
-
-This is an early-stage project. Working:
-- ✅ Dashboard with project management
-- ✅ Repository auto-detection
-- ✅ Joern code structure analysis
-- ✅ Cold-start decision extraction
-- ✅ Claude Code session ingestion
-- ✅ MCP Server (4 tools)
-- ✅ Full-text search on decisions (Memgraph 3.6+)
-- ✅ Multi-project isolation
-
-Not yet implemented:
-- ⬜ Five-slot retrieval priority system
-- ⬜ Decision relationship edges (CAUSED_BY, CONFLICTS_WITH, etc.)
-- ⬜ Semantic vector search
-- ⬜ Background refinement pipeline (staleness detection, keyword normalization)
-- ⬜ Team knowledge map (bus factor visualization)
-- ⬜ Interactive KT quiz system
-
----
-
-## License
-
-Apache-2.0
+- [ ] **后台精炼管线** — 夜间自动优化锚定精度、staleness 检测、摘要层生成
+- [ ] **Session ingestion v2** — 升级到 CPG 感知的函数级锚定
+- [ ] **消费层** — 出题式 KT、知识地图、团队知识覆盖可视化
+- [ ] **团队共享** — Transcript 多人共享存储方案
+- [ ] **向量搜索** — Memgraph 内置向量 or 独立向量库，实现语义兜底检索

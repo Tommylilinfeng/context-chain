@@ -1,349 +1,412 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CKG Dashboard</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
-  <style>
-    body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
-    .card-header { border-bottom: 1px solid #334155; padding: 16px 20px; font-weight: 600; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
-    .badge-blue { background: #1e3a5f; color: #60a5fa; }
-    .badge-green { background: #14532d; color: #4ade80; }
-    .badge-yellow { background: #422006; color: #fbbf24; }
-    .badge-red { background: #450a0a; color: #f87171; }
-    .badge-purple { background: #3b0764; color: #c084fc; }
-    .tab-active { border-bottom: 2px solid #60a5fa; color: #60a5fa; }
-    .tab-inactive { color: #94a3b8; cursor: pointer; }
-    .tab-inactive:hover { color: #e2e8f0; }
-    .input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; width: 100%; }
-    .input:focus { outline: none; border-color: #60a5fa; }
-    .btn { padding: 8px 16px; border-radius: 8px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: none; }
-    .btn-primary { background: #2563eb; color: white; }
-    .btn-primary:hover { background: #1d4ed8; }
-    .btn-danger { background: #dc2626; color: white; }
-    .btn-danger:hover { background: #b91c1c; }
-    .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
-    .btn-ghost:hover { background: #1e293b; color: #e2e8f0; }
-    textarea.input { min-height: 100px; resize: vertical; }
-    .coverage-bar { height: 6px; border-radius: 3px; background: #334155; overflow: hidden; }
-    .coverage-fill { height: 100%; border-radius: 3px; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CKG — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0e11; --surface: #14171c; --surface-2: #1c2028; --border: #2a2f3a;
+    --text: #e0e4ec; --text-dim: #6b7280;
+    --accent: #3b82f6; --accent-hover: #60a5fa;
+    --green: #22c55e; --red: #ef4444; --yellow: #eab308; --purple: #a78bfa;
+    --mono: 'JetBrains Mono', monospace; --sans: 'DM Sans', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:var(--sans); background:var(--bg); color:var(--text); min-height:100vh; display:flex; }
+  .sidebar { width:220px; min-height:100vh; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; position:fixed; top:0; left:0; bottom:0; z-index:10; }
+  .sidebar-brand { padding:20px 16px; border-bottom:1px solid var(--border); }
+  .sidebar-brand h1 { font-size:15px; font-weight:700; }
+  .sidebar-brand p { font-size:11px; color:var(--text-dim); margin-top:4px; line-height:1.4; }
+  .sidebar-nav { padding:12px 8px; flex:1; }
+  .sidebar-section { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; padding:12px 12px 6px; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:6px; font-size:13px; font-weight:500; color:var(--text-dim); text-decoration:none; cursor:pointer; transition:all 0.12s; border:none; background:none; width:100%; text-align:left; }
+  .nav-item:hover { background:var(--surface-2); color:var(--text); }
+  .nav-item.active { background:var(--surface-2); color:var(--accent); }
+  .nav-item .icon { width:18px; text-align:center; font-size:14px; }
+  .main { margin-left:220px; flex:1; min-height:100vh; }
+  .page-header { padding:20px 32px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:16px; }
+  .page-header h2 { font-size:18px; font-weight:700; }
+  .page-content { padding:24px 32px; max-width:1100px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+  .card-header { padding:14px 18px; border-bottom:1px solid var(--border); font-size:14px; font-weight:600; display:flex; align-items:center; justify-content:space-between; }
+  .card-body { padding:16px 18px; }
+  .stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:24px; }
+  .stat-card { padding:18px; }
+  .stat-value { font-size:28px; font-weight:700; font-family:var(--mono); }
+  .stat-label { font-size:13px; color:var(--text-dim); margin-top:4px; }
+  .stat-value.blue { color:var(--accent); } .stat-value.green { color:var(--green); } .stat-value.yellow { color:var(--yellow); } .stat-value.purple { color:var(--purple); }
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-family:var(--mono); font-weight:500; }
+  .badge-blue { background:#1e3a5f; color:var(--accent); } .badge-green { background:#14532d; color:var(--green); } .badge-yellow { background:#422006; color:var(--yellow); } .badge-purple { background:#2e1065; color:var(--purple); } .badge-red { background:#450a0a; color:var(--red); }
+  .list-row { display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .list-row:last-child { border-bottom:none; }
+  .list-row .name { font-weight:500; }
+  .list-row .badges { display:flex; gap:8px; }
+  input, select, textarea { background:var(--surface-2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:var(--sans); font-size:14px; padding:9px 12px; transition:border-color 0.15s; width:100%; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  textarea { resize:vertical; min-height:100px; line-height:1.5; }
+  select { cursor:pointer; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:36px; }
+  button { font-family:var(--sans); font-size:13px; font-weight:600; padding:8px 16px; border:none; border-radius:6px; cursor:pointer; transition:all 0.15s; }
+  .btn-primary { background:var(--accent); color:white; } .btn-primary:hover { background:var(--accent-hover); }
+  .btn-ghost { background:var(--surface-2); color:var(--text-dim); border:1px solid var(--border); } .btn-ghost:hover { color:var(--text); }
+  .btn-danger { background:#7f1d1d; color:var(--red); } .btn-danger:hover { background:#991b1b; }
+  .cov-row { display:flex; align-items:center; gap:12px; padding:6px 0; font-size:13px; }
+  .cov-name { width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cov-bar { flex:1; height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+  .cov-fill { height:100%; border-radius:3px; }
+  .cov-val { width:30px; text-align:right; font-family:var(--mono); color:var(--text-dim); }
+  .decision-card { padding:16px 18px; } .decision-card + .decision-card { border-top:1px solid var(--border); }
+  .decision-card .summary { font-weight:600; font-size:14px; margin-bottom:6px; }
+  .decision-card .content { font-size:13px; color:var(--text-dim); line-height:1.6; margin-bottom:8px; }
+  .decision-card .meta { display:flex; gap:6px; flex-wrap:wrap; }
+  .graph-container svg { width:100%; }
+  .flex { display:flex; } .gap-2 { gap:8px; } .gap-3 { gap:12px; } .mb-4 { margin-bottom:16px; } .mb-6 { margin-bottom:24px; } .mt-4 { margin-top:16px; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; } .hidden { display:none; }
+  .page { display:none; } .page.active { display:block; }
+  .form-field { margin-bottom:14px; } .form-field label { display:block; font-size:12px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+  .form-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+  .biz-card { padding:16px 18px; cursor:pointer; transition:background 0.1s; } .biz-card:hover { background:var(--surface-2); } .biz-card + .biz-card { border-top:1px solid var(--border); }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; } .dot-green { background:var(--green); } .dot-red { background:var(--red); } .dot-yellow { background:var(--yellow); }
+  .setup-log { max-height:400px; overflow-y:auto; font-family:var(--mono); font-size:12px; line-height:1.7; white-space:pre-wrap; }
+  .action-btns { display:flex; flex-wrap:wrap; gap:10px; }
+  .action-btns button { width:auto; }
+</style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
-    async function api(path, opts) {
-      const res = await fetch(path, opts);
-      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      return res.json();
+
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <h1>CKG</h1>
+    <p>grep finds what code does,<br>we record why it was written that way</p>
+  </div>
+  <div class="sidebar-nav">
+    <div class="sidebar-section">Explore</div>
+    <button class="nav-item active" data-page="overview"><span class="icon">&#x1F4CA;</span> Overview</button>
+    <button class="nav-item" data-page="decisions"><span class="icon">&#x1F4A1;</span> Decisions</button>
+    <button class="nav-item" data-page="coverage"><span class="icon">&#x1F5FA;</span> Coverage</button>
+    <button class="nav-item" data-page="graph"><span class="icon">&#x1F310;</span> Dependencies</button>
+    <div class="sidebar-section">Manage</div>
+    <button class="nav-item" data-page="system"><span class="icon">&#x2699;</span> System</button>
+    <button class="nav-item" data-page="business"><span class="icon">&#x1F4DD;</span> Business Context</button>
+    <a href="/cold-start" class="nav-item"><span class="icon">&#x1F9CA;</span> Cold Start</a>
+  </div>
+</nav>
+
+<div class="main">
+
+<!-- OVERVIEW -->
+<div id="page-overview" class="page active">
+  <div class="page-header"><h2>Overview</h2></div>
+  <div class="page-content">
+    <div class="stat-grid">
+      <div class="card stat-card"><div class="stat-value blue" id="statEntities">&mdash;</div><div class="stat-label">Code Entities</div></div>
+      <div class="card stat-card"><div class="stat-value green" id="statDecisions">&mdash;</div><div class="stat-label">Decisions</div></div>
+      <div class="card stat-card"><div class="stat-value yellow" id="statAnchored">&mdash;</div><div class="stat-label">Anchored</div></div>
+      <div class="card stat-card"><div class="stat-value purple" id="statBusiness">&mdash;</div><div class="stat-label">Business Context</div></div>
+    </div>
+    <div class="card mb-6"><div class="card-header">Repos</div><div class="card-body" id="repoList"></div></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-header">Entity Types</div><div class="card-body" id="entityTypes"></div></div>
+      <div class="card"><div class="card-header">Edge Types</div><div class="card-body" id="edgeTypes"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- DECISIONS -->
+<div id="page-decisions" class="page">
+  <div class="page-header"><h2>Decisions</h2></div>
+  <div class="page-content">
+    <div class="flex gap-3 mb-6">
+      <input id="decisionSearch" placeholder="Search decisions..." style="flex:1">
+      <select id="decisionRepo" style="width:180px"><option value="">All repos</option></select>
+      <button class="btn-primary" onclick="searchDecisions()">Search</button>
+    </div>
+    <div style="font-size:13px;color:var(--text-dim)" class="mb-4" id="decisionCount">&mdash;</div>
+    <div class="card" id="decisionList"></div>
+  </div>
+</div>
+
+<!-- COVERAGE -->
+<div id="page-coverage" class="page">
+  <div class="page-header"><h2>Coverage Map</h2><select id="coverageRepo" style="width:180px;margin-left:auto" onchange="loadCoverage()"></select></div>
+  <div class="page-content" id="coverageContent"></div>
+</div>
+
+<!-- GRAPH -->
+<div id="page-graph" class="page">
+  <div class="page-header"><h2>Cross-service Dependencies</h2></div>
+  <div class="page-content" id="graphContent"></div>
+</div>
+
+<!-- SYSTEM -->
+<div id="page-system" class="page">
+  <div class="page-header"><h2>System</h2></div>
+  <div class="page-content">
+
+    <div class="grid-2 mb-6">
+      <div class="card">
+        <div class="card-header"><span>Memgraph</span><span id="mgBadge" class="badge badge-yellow">checking...</span></div>
+        <div class="card-body" id="mgInfo" style="font-size:13px;color:var(--text-dim)">Connecting...</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span>Config</span><span id="cfgBadge" class="badge badge-yellow">checking...</span></div>
+        <div class="card-body" id="cfgInfo" style="font-size:13px;color:var(--text-dim)">Loading...</div>
+      </div>
+    </div>
+
+    <div class="card mb-6">
+      <div class="card-header">Data Per Repo</div>
+      <div class="card-body" id="sysRepos"><span style="color:var(--text-dim)">Loading...</span></div>
+    </div>
+
+    <div class="card mb-6">
+      <div class="card-header">Actions</div>
+      <div class="card-body">
+        <div class="action-btns">
+          <button class="btn-primary" onclick="runSetup('full-setup')">&#x1F680; Full Setup</button>
+          <button class="btn-ghost" onclick="runSetup('schema')">&#x1F4D0; Schema</button>
+          <button class="btn-ghost" onclick="runSetup('ingest-all')">&#x1F4E5; Ingest CPG</button>
+          <button class="btn-ghost" onclick="runSetup('link-all')">&#x1F517; Link Repos</button>
+          <button class="btn-danger" onclick="if(confirm('Delete ALL decisions?'))runSetup('clear-decisions')">&#x1F5D1; Clear Decisions</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:10px">
+          Full Setup = Schema + Ingest all CPG files + Link repos &amp; services
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span>Setup Log</span><span id="setupBadge" class="badge" style="display:none"></span></div>
+      <div class="card-body setup-log" id="setupLog"><span style="color:var(--text-dim);font-style:italic">Click an action above to begin...</span></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- BUSINESS CONTEXT -->
+<div id="page-business" class="page">
+  <div class="page-header"><h2>Business Context</h2><button class="btn-primary" style="margin-left:auto" onclick="newBizContext()">+ New</button></div>
+  <div class="page-content">
+    <div class="card mb-6 hidden" id="bizForm">
+      <div class="card-body">
+        <div class="form-field"><label>Title</label><input id="bizSummary" placeholder="e.g. Order flow constraints"></div>
+        <div class="form-field"><label>Description</label><textarea id="bizContent" rows="6" placeholder="Describe business logic, constraints, decisions..."></textarea></div>
+        <div class="grid-2">
+          <div class="form-field"><label>Keywords</label><input id="bizKeywords" placeholder="order, payment, coupon"></div>
+          <div class="form-field"><label>Scope</label><input id="bizScope" placeholder="bite-me-website, biteme-shared"></div>
+        </div>
+        <input type="hidden" id="bizEditId">
+        <div class="form-actions"><button class="btn-ghost" onclick="closeBizForm()">Cancel</button><button class="btn-primary" onclick="saveBizContext()">Save</button></div>
+      </div>
+    </div>
+    <div class="card" id="bizList"></div>
+  </div>
+</div>
+
+</div><!-- .main -->
+
+<script>
+// ── Nav ─────────────────────────────────
+document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'))
+    btn.classList.add('active')
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
+    document.getElementById('page-' + btn.dataset.page).classList.add('active')
+    if (btn.dataset.page === 'decisions' && !decisionsLoaded) searchDecisions()
+    if (btn.dataset.page === 'coverage' && !coverageLoaded) loadCoverage()
+    if (btn.dataset.page === 'graph' && !graphLoaded) loadGraph()
+    if (btn.dataset.page === 'business' && !bizLoaded) loadBiz()
+    if (btn.dataset.page === 'system' && !systemLoaded) loadSystem()
+  })
+})
+
+async function api(path, opts) { const r = await fetch(path, opts); return r.json() }
+function esc(s) { return !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+// ── Overview ────────────────────────────
+let repos = []
+async function loadOverview() {
+  try {
+    const [stats, rd] = await Promise.all([api('/api/stats'), api('/api/repos')])
+    repos = rd
+    const d = stats.decisions
+    document.getElementById('statEntities').textContent = stats.entities.reduce((s,e) => s+e.count, 0)
+    document.getElementById('statDecisions').textContent = d.total
+    document.getElementById('statAnchored').textContent = d.anchored
+    document.getElementById('statBusiness').textContent = d.business
+    document.getElementById('repoList').innerHTML = rd.map(r =>
+      `<div class="list-row"><span class="name">${r.repo}</span><div class="badges"><span class="badge badge-blue">${r.entities} entities</span><span class="badge badge-green">${r.decisions} decisions</span></div></div>`
+    ).join('')
+    document.getElementById('entityTypes').innerHTML = stats.entities.map(e =>
+      `<div class="list-row"><span>${e.type}</span><span style="font-family:var(--mono);color:var(--text-dim)">${e.count}</span></div>`
+    ).join('')
+    document.getElementById('edgeTypes').innerHTML = stats.edges.map(e =>
+      `<div class="list-row"><span>${e.type}</span><span style="font-family:var(--mono);color:var(--text-dim)">${e.count}</span></div>`
+    ).join('')
+    const selects = [document.getElementById('decisionRepo'), document.getElementById('coverageRepo')]
+    for (const sel of selects) { for (const r of rd) { const o = document.createElement('option'); o.value = r.repo; o.textContent = r.repo; sel.appendChild(o) } }
+  } catch(e) {
+    document.getElementById('statEntities').textContent = '!'
+    document.getElementById('statEntities').title = e.message
+  }
+}
+loadOverview()
+
+// ── Decisions ───────────────────────────
+let decisionsLoaded = false
+async function searchDecisions() {
+  decisionsLoaded = true
+  const q = document.getElementById('decisionSearch').value, repo = document.getElementById('decisionRepo').value
+  const p = new URLSearchParams(); if(q) p.set('q',q); if(repo) p.set('repo',repo)
+  const data = await api('/api/decisions?'+p)
+  document.getElementById('decisionCount').textContent = data.length + ' results'
+  const srcLabel = s => ({cold_start:'Cold Start',cold_start_v2:'Cold Start v2',claude_code_session:'Session',manual_business_context:'Business'}[s]||s)
+  const srcBadge = s => ({cold_start:'badge-yellow',cold_start_v2:'badge-yellow',claude_code_session:'badge-blue',manual_business_context:'badge-green'}[s]||'badge-blue')
+  const typeLabel = t => ({bug:'&#x1F41B; Bug',suboptimal:'&#x26A1; Suboptimal'}[t]||'')
+  const typeBadge = t => ({bug:'badge-red',suboptimal:'badge-yellow'}[t]||'')
+  document.getElementById('decisionList').innerHTML = data.length === 0
+    ? '<div style="padding:40px;text-align:center;color:var(--text-dim)">No decisions found</div>'
+    : data.map(d => {
+      const ft = d.finding_type || 'decision'
+      const typeBdg = ft !== 'decision' ? `<span class="badge ${typeBadge(ft)}">${typeLabel(ft)}</span>` : ''
+      const critiqueHtml = d.critique ? `<div style="margin-top:8px;padding:10px 12px;background:${ft==='bug'?'#450a0a22':'#42200622'};border-left:3px solid ${ft==='bug'?'var(--red)':'var(--yellow)'};border-radius:4px;font-size:13px;line-height:1.5;color:var(--text)">${esc(d.critique)}</div>` : ''
+      return `<div class="decision-card"><div style="display:flex;justify-content:space-between;align-items:start;gap:8px"><div class="summary">${esc(d.summary)}</div><div style="display:flex;gap:6px;flex-shrink:0">${typeBdg}<span class="badge ${srcBadge(d.source)}">${srcLabel(d.source)}</span></div></div><div class="content">${esc(d.content)}</div>${critiqueHtml}<div class="meta">${(d.keywords||[]).map(k=>`<span class="badge badge-blue">${esc(k)}</span>`).join('')}${(d.anchors||[]).filter(Boolean).map(a=>`<span class="badge badge-yellow">${esc(a)}</span>`).join('')}</div></div>`
+    }).join('')
+}
+document.getElementById('decisionSearch').addEventListener('keydown', e => { if(e.key==='Enter') searchDecisions() })
+
+// ── Coverage ────────────────────────────
+let coverageLoaded = false
+async function loadCoverage() {
+  coverageLoaded = true
+  const repo = document.getElementById('coverageRepo').value; if(!repo) return
+  const data = await api('/api/coverage/'+repo)
+  const mx = Math.max(...data.files.map(f=>f.decisions), ...data.sql.map(s=>s.decisions), 1)
+  const bar = (name,dec,label) => { const pct=Math.max((dec/mx)*100,dec>0?5:0); const color=dec===0?'var(--red)':dec<2?'var(--yellow)':'var(--green)'; return `<div class="cov-row">${label?`<span class="badge badge-purple" style="width:70px;text-align:center">${label}</span>`:''}<div class="cov-name">${esc(name)}</div><div class="cov-bar"><div class="cov-fill" style="width:${pct}%;background:${color}"></div></div><div class="cov-val">${dec}</div></div>` }
+  let html = ''
+  if(data.files.length) { const nc=data.files.filter(f=>f.decisions===0).length; html += `<div class="card mb-6"><div class="card-header"><span>Files (${data.files.length})</span><span style="font-size:12px;color:var(--text-dim)">${nc} uncovered</span></div><div class="card-body">${data.files.map(f=>bar(f.name,f.decisions)).join('')}</div></div>` }
+  if(data.sql.length) { const nc=data.sql.filter(s=>s.decisions===0).length; html += `<div class="card"><div class="card-header"><span>SQL (${data.sql.length})</span><span style="font-size:12px;color:var(--text-dim)">${nc} uncovered</span></div><div class="card-body">${data.sql.map(s=>bar(s.name,s.decisions,s.type)).join('')}</div></div>` }
+  document.getElementById('coverageContent').innerHTML = html || '<div style="padding:40px;text-align:center;color:var(--text-dim)">No data</div>'
+}
+
+// ── Graph ───────────────────────────────
+let graphLoaded = false
+async function loadGraph() {
+  graphLoaded = true; const data = await api('/api/graph')
+  const W=700,H=380,cx=W/2,cy=H/2,rad=130
+  const pos = data.nodes.map((n,i) => { const a=(2*Math.PI*i)/data.nodes.length-Math.PI/2; return {...n, x:cx+rad*Math.cos(a), y:cy+rad*Math.sin(a)} })
+  const nm={}; pos.forEach(n=>nm[n.id]=n)
+  const col = id => id.includes('website')?'#60a5fa':id.includes('shared')?'#a78bfa':id.includes('infra')?'#eab308':'#22c55e'
+  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="arr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 3 L 0 6" fill="#64748b"/></marker><marker id="arr2" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 3 L 0 6" fill="#eab308"/></marker></defs>`
+  for(const e of data.edges){ const f=nm[e.from],t=nm[e.to]; if(!f||!t)continue; const dx=t.x-f.x,dy=t.y-f.y,dist=Math.sqrt(dx*dx+dy*dy),r=36; const sx=f.x+(dx/dist)*r,sy=f.y+(dy/dist)*r,ex=t.x-(dx/dist)*r,ey=t.y-(dy/dist)*r; const isApi=e.type==='api'; svg+=`<line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="${isApi?'#eab308':'#64748b'}" stroke-width="${isApi?2:1.5}" ${isApi?'stroke-dasharray="6 3"':''} marker-end="url(#${isApi?'arr2':'arr'})"/>`; if(e.weight) svg+=`<text x="${(sx+ex)/2}" y="${(sy+ey)/2-8}" text-anchor="middle" fill="#6b7280" font-size="11">${e.weight}</text>` }
+  for(const n of pos){ const c=col(n.id); svg+=`<circle cx="${n.x}" cy="${n.y}" r="32" fill="${c}" fill-opacity="0.12" stroke="${c}" stroke-width="2"/><text x="${n.x}" y="${n.y+1}" text-anchor="middle" fill="${c}" font-size="11" font-weight="600" font-family="DM Sans">${n.id.replace('biteme-','').replace('bite-me-','')}</text><text x="${n.x}" y="${n.y+48}" text-anchor="middle" fill="#6b7280" font-size="10" font-family="JetBrains Mono">${n.size} entities</text>` }
+  svg += '</svg>'
+  const detail = data.edges.map(e=>`<div class="list-row"><span>${e.from} &rarr; ${e.to}</span><span class="badge ${e.type==='api'?'badge-yellow':'badge-blue'}">${e.type==='api'?'API':(e.weight||0)+' calls'}</span></div>`).join('')
+  document.getElementById('graphContent').innerHTML = `<div class="card mb-6"><div class="card-body graph-container">${svg}</div></div><div class="card"><div class="card-header">Edge Details</div><div class="card-body">${detail||'<div style="color:var(--text-dim)">No edges</div>'}</div></div>`
+}
+
+// ── System ──────────────────────────────
+let systemLoaded = false
+async function loadSystem() {
+  systemLoaded = true
+  try {
+    const s = await api('/api/system/status')
+
+    // Memgraph
+    if (s.memgraph.connected) {
+      document.getElementById('mgBadge').className = 'badge badge-green'
+      document.getElementById('mgBadge').textContent = 'connected'
+      document.getElementById('mgInfo').innerHTML = `<span class="dot dot-green"></span> &nbsp;${s.totals.codeEntities} entities, ${s.totals.decisions} decisions, ${s.totals.callEdges} call edges, ${s.totals.anchoredEdges} anchors`
+    } else {
+      document.getElementById('mgBadge').className = 'badge badge-red'
+      document.getElementById('mgBadge').textContent = 'disconnected'
+      document.getElementById('mgInfo').innerHTML = `<span class="dot dot-red"></span> &nbsp;${esc(s.memgraph.error) || 'Cannot connect'}<br><br>Run: <code>docker compose up -d</code>`
     }
 
-    function StatsPanel() {
-      const [stats, setStats] = useState(null);
-      const [repos, setRepos] = useState([]);
-      useEffect(() => { api('/api/stats').then(setStats); api('/api/repos').then(setRepos); }, []);
-      if (!stats) return React.createElement('div', {className:'text-center py-12 text-gray-400'}, '加载中...');
-      const d = stats.decisions;
-      return React.createElement('div', null,
-        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '📊 图谱概览'),
-        React.createElement('div', {className:'grid grid-cols-4 gap-4 mb-8'},
-          [['代码实体', stats.entities.reduce((s,e)=>s+e.count,0), 'text-blue-400'],
-           ['决策记录', d.total, 'text-green-400'],
-           ['已锚定', d.anchored, 'text-yellow-400'],
-           ['业务上下文', d.business, 'text-purple-400']
-          ].map(([label,val,color]) =>
-            React.createElement('div', {key:label, className:'card p-5'},
-              React.createElement('div', {className:'text-3xl font-bold '+color}, val),
-              React.createElement('div', {className:'text-sm text-gray-400 mt-1'}, label)
-            )
-          )
-        ),
-        React.createElement('div', {className:'card mb-6'},
-          React.createElement('div', {className:'card-header'}, 'Repos'),
-          React.createElement('div', {className:'p-4'},
-            repos.map(r => React.createElement('div', {key:r.repo, className:'flex items-center justify-between py-3 border-b border-gray-700'},
-              React.createElement('span', {className:'font-medium'}, r.repo),
-              React.createElement('div', {className:'flex gap-3'},
-                React.createElement('span', {className:'badge badge-blue'}, r.entities+' 实体'),
-                React.createElement('span', {className:'badge badge-green'}, r.decisions+' 决策')
-              )
-            ))
-          )
-        ),
-        React.createElement('div', {className:'grid grid-cols-2 gap-4'},
-          React.createElement('div', {className:'card'},
-            React.createElement('div', {className:'card-header'}, '实体类型'),
-            React.createElement('div', {className:'p-4'},
-              stats.entities.map(e => React.createElement('div', {key:e.type, className:'flex justify-between py-1.5'},
-                React.createElement('span', {className:'text-gray-300'}, e.type),
-                React.createElement('span', {className:'font-mono text-gray-400'}, e.count)
-              ))
-            )
-          ),
-          React.createElement('div', {className:'card'},
-            React.createElement('div', {className:'card-header'}, '关系类型'),
-            React.createElement('div', {className:'p-4'},
-              stats.edges.map(e => React.createElement('div', {key:e.type, className:'flex justify-between py-1.5'},
-                React.createElement('span', {className:'text-gray-300'}, e.type),
-                React.createElement('span', {className:'font-mono text-gray-400'}, e.count)
-              ))
-            )
-          )
-        )
-      );
+    // Config
+    if (s.config.loaded) {
+      document.getElementById('cfgBadge').className = 'badge badge-green'
+      document.getElementById('cfgBadge').textContent = s.config.repos.length + ' repos'
+      document.getElementById('cfgInfo').innerHTML = s.config.repos.map(r =>
+        `<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span class="dot ${r.cpgExists ? 'dot-green' : 'dot-red'}"></span><span>${r.name}</span><span class="badge" style="background:var(--surface-2);color:var(--text-dim)">${r.type}</span>${r.cpgExists ? '<span style="color:var(--green);font-size:11px">CPG ready</span>' : '<span style="color:var(--red);font-size:11px">CPG missing</span>'}</div>`
+      ).join('')
+    } else {
+      document.getElementById('cfgBadge').className = 'badge badge-red'
+      document.getElementById('cfgBadge').textContent = 'error'
+      document.getElementById('cfgInfo').innerHTML = `<span class="dot dot-red"></span> &nbsp;${esc(s.config.error)}`
     }
 
-    function BusinessContext() {
-      const [items, setItems] = useState([]);
-      const [editing, setEditing] = useState(null);
-      const [form, setForm] = useState({summary:'',content:'',keywords:'',scope:''});
-      const load = useCallback(() => { api('/api/business-context').then(setItems); }, []);
-      useEffect(load, []);
-      const save = async () => {
-        await api('/api/business-context', { method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ id: editing === '__new__' ? undefined : editing, summary:form.summary, content:form.content,
-            keywords:form.keywords.split(',').map(k=>k.trim()).filter(Boolean),
-            scope:form.scope.split(',').map(s=>s.trim()).filter(Boolean) })
-        });
-        setEditing(null); setForm({summary:'',content:'',keywords:'',scope:''}); load();
-      };
-      const del = async (id) => { if(!confirm('确定删除？'))return; await api('/api/business-context/'+encodeURIComponent(id),{method:'DELETE'}); load(); };
-      const startEdit = (item) => { setEditing(item.id); setForm({summary:item.summary,content:item.content,keywords:(item.keywords||[]).join(', '),scope:(item.scope||[]).join(', ')}); };
-      const startNew = () => { setEditing('__new__'); setForm({summary:'',content:'',keywords:'',scope:''}); };
-
-      return React.createElement('div', null,
-        React.createElement('div', {className:'flex items-center justify-between mb-6'},
-          React.createElement('div', null,
-            React.createElement('h2', {className:'text-xl font-bold'}, '📝 业务上下文'),
-            React.createElement('p', {className:'text-sm text-gray-400 mt-1'}, '在 cold-start 之前写入业务逻辑描述，让决策提取更准确')
-          ),
-          React.createElement('button', {className:'btn btn-primary', onClick:startNew}, '+ 新建')
-        ),
-        editing && React.createElement('div', {className:'card mb-6 p-5'},
-          React.createElement('div', {className:'space-y-4'},
-            React.createElement('div', null,
-              React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '标题'),
-              React.createElement('input', {className:'input', value:form.summary, onChange:e=>setForm({...form,summary:e.target.value}), placeholder:'如：订单流程的核心逻辑和约束'})
-            ),
-            React.createElement('div', null,
-              React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '详细描述'),
-              React.createElement('textarea', {className:'input', value:form.content, onChange:e=>setForm({...form,content:e.target.value}), rows:8, placeholder:'详细描述业务逻辑、约束条件、决策原因...'})
-            ),
-            React.createElement('div', {className:'grid grid-cols-2 gap-4'},
-              React.createElement('div', null,
-                React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '关键词（逗号分隔）'),
-                React.createElement('input', {className:'input', value:form.keywords, onChange:e=>setForm({...form,keywords:e.target.value}), placeholder:'订单, 支付, 优惠券'})
-              ),
-              React.createElement('div', null,
-                React.createElement('label', {className:'block text-sm text-gray-400 mb-1'}, '关联 Repo（逗号分隔）'),
-                React.createElement('input', {className:'input', value:form.scope, onChange:e=>setForm({...form,scope:e.target.value}), placeholder:'bite-me-website, biteme-shared'})
-              )
-            ),
-            React.createElement('div', {className:'flex gap-2 justify-end'},
-              React.createElement('button', {className:'btn btn-ghost', onClick:()=>setEditing(null)}, '取消'),
-              React.createElement('button', {className:'btn btn-primary', onClick:save, disabled:!form.summary||!form.content}, '保存')
-            )
-          )
-        ),
-        items.length === 0 && !editing ?
-          React.createElement('div', {className:'card p-12 text-center text-gray-400'},
-            React.createElement('p', {className:'text-lg mb-2'}, '还没有业务上下文'),
-            React.createElement('p', {className:'text-sm'}, '点击"新建"开始描述你的业务逻辑')
-          ) :
-          React.createElement('div', {className:'space-y-3'},
-            items.map(item => React.createElement('div', {key:item.id, className:'card p-4'},
-              React.createElement('div', {className:'flex items-start justify-between'},
-                React.createElement('div', {className:'flex-1'},
-                  React.createElement('div', {className:'font-medium mb-1'}, item.summary),
-                  React.createElement('div', {className:'text-sm text-gray-400 whitespace-pre-wrap'}, item.content),
-                  React.createElement('div', {className:'flex gap-2 mt-2 flex-wrap'},
-                    (item.keywords||[]).map(k => React.createElement('span', {key:k, className:'badge badge-blue'}, k)),
-                    (item.scope||[]).map(s => React.createElement('span', {key:s, className:'badge badge-purple'}, s))
-                  )
-                ),
-                React.createElement('div', {className:'flex gap-2 ml-4'},
-                  React.createElement('button', {className:'btn btn-ghost text-sm', onClick:()=>startEdit(item)}, '编辑'),
-                  React.createElement('button', {className:'btn btn-danger text-sm', onClick:()=>del(item.id)}, '删除')
-                )
-              )
-            ))
-          )
-      );
+    // Repos data
+    if (s.repos.length > 0) {
+      document.getElementById('sysRepos').innerHTML = s.repos.map(r => {
+        const ents = Object.entries(r.entities).map(([k,v]) => `<span class="badge badge-blue">${v} ${k}</span>`).join(' ')
+        return `<div class="list-row"><div><span class="name">${r.name}</span><div style="margin-top:4px">${ents}</div></div><div class="badges"><span class="badge badge-green">${r.decisions} decisions</span><span class="badge badge-yellow">${r.calls} calls</span></div></div>`
+      }).join('')
+    } else {
+      document.getElementById('sysRepos').innerHTML = `<div style="color:var(--text-dim);padding:8px 0">${s.memgraph.connected ? 'No data loaded. Click "Full Setup" below.' : 'Memgraph not connected.'}</div>`
     }
+  } catch(e) {
+    document.getElementById('mgBadge').className = 'badge badge-red'
+    document.getElementById('mgBadge').textContent = 'error'
+    document.getElementById('mgInfo').textContent = e.message
+  }
+}
 
-    function Decisions() {
-      const [decisions, setDecisions] = useState([]);
-      const [query, setQuery] = useState('');
-      const [repoFilter, setRepoFilter] = useState('');
-      const [repos, setRepos] = useState([]);
-      useEffect(() => { api('/api/repos').then(setRepos); }, []);
-      const search = useCallback(() => {
-        const p = new URLSearchParams(); if(query) p.set('q',query); if(repoFilter) p.set('repo',repoFilter);
-        api('/api/decisions?'+p).then(setDecisions);
-      }, [query, repoFilter]);
-      useEffect(search, [repoFilter]);
-      const srcLabel = s => ({cold_start:'冷启动',claude_code_session:'Session',manual_business_context:'业务上下文'}[s]||s);
-      const srcBadge = s => ({cold_start:'badge-yellow',claude_code_session:'badge-blue',manual_business_context:'badge-green'}[s]||'badge-blue');
+let setupES = null
+async function runSetup(command) {
+  const logEl = document.getElementById('setupLog')
+  const badge = document.getElementById('setupBadge')
+  logEl.innerHTML = ''
+  badge.style.display = 'inline-block'
+  badge.className = 'badge badge-yellow'
+  badge.textContent = 'running...'
 
-      return React.createElement('div', null,
-        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '💡 决策浏览器'),
-        React.createElement('div', {className:'flex gap-3 mb-6'},
-          React.createElement('input', {className:'input flex-1', value:query, onChange:e=>setQuery(e.target.value), onKeyDown:e=>{if(e.key==='Enter')search()}, placeholder:'搜索决策...'}),
-          React.createElement('select', {className:'input', style:{width:'auto'}, value:repoFilter, onChange:e=>setRepoFilter(e.target.value)},
-            React.createElement('option', {value:''}, '全部 Repo'),
-            repos.map(r => React.createElement('option', {key:r.repo, value:r.repo}, r.repo))
-          ),
-          React.createElement('button', {className:'btn btn-primary', onClick:search}, '搜索')
-        ),
-        React.createElement('div', {className:'text-sm text-gray-400 mb-3'}, decisions.length+' 条结果'),
-        React.createElement('div', {className:'space-y-3'},
-          decisions.map(d => React.createElement('div', {key:d.id, className:'card p-4'},
-            React.createElement('div', {className:'flex items-start justify-between mb-2'},
-              React.createElement('div', {className:'font-medium'}, d.summary),
-              React.createElement('span', {className:'badge '+srcBadge(d.source)}, srcLabel(d.source))
-            ),
-            React.createElement('div', {className:'text-sm text-gray-400 mb-2'}, d.content),
-            React.createElement('div', {className:'flex gap-2 flex-wrap'},
-              (d.keywords||[]).map(k => React.createElement('span', {key:k, className:'badge badge-blue text-xs'}, k)),
-              (d.anchors||[]).filter(Boolean).map(a => React.createElement('span', {key:a, className:'badge badge-yellow text-xs'}, '📎 '+a))
-            )
-          ))
-        )
-      );
-    }
+  try {
+    const res = await fetch('/api/system/run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ command })
+    })
+    if (!res.ok) { const e = await res.json(); logEl.textContent = 'Error: ' + (e.error || 'Failed'); badge.className = 'badge badge-red'; badge.textContent = 'error'; return }
 
-    function Coverage() {
-      const [repos, setRepos] = useState([]);
-      const [sel, setSel] = useState('');
-      const [data, setData] = useState(null);
-      useEffect(() => { api('/api/repos').then(r => { setRepos(r); if(r.length) setSel(r[0].repo); }); }, []);
-      useEffect(() => { if(sel) api('/api/coverage/'+sel).then(setData); }, [sel]);
-      const mx = data ? Math.max(...data.files.map(f=>f.decisions), ...data.sql.map(s=>s.decisions), 1) : 1;
+    if (setupES) setupES.close()
+    setupES = new EventSource('/api/system/run/stream')
+    setupES.addEventListener('log', e => {
+      const div = document.createElement('div')
+      const t = e.data
+      div.textContent = t
+      if (t.includes('\u2713')) div.style.color = 'var(--green)'
+      else if (t.includes('\u274c')) div.style.color = 'var(--red)'
+      else if (t.includes('\u2501')) { div.style.color = 'var(--accent)'; div.style.fontWeight = '700' }
+      logEl.appendChild(div)
+      logEl.scrollTop = logEl.scrollHeight
+    })
+    setupES.addEventListener('status', e => {
+      badge.className = 'badge ' + (e.data === 'done' ? 'badge-green' : 'badge-red')
+      badge.textContent = e.data
+      setupES.close(); setupES = null
+      // Refresh system status + overview
+      loadSystem()
+      loadOverview()
+    })
+    setupES.onerror = () => { badge.className = 'badge badge-red'; badge.textContent = 'error'; setupES.close(); setupES = null }
+  } catch(e) { logEl.textContent = e.message; badge.className = 'badge badge-red'; badge.textContent = 'error' }
+}
 
-      const renderBar = (name, decisions, label) =>
-        React.createElement('div', {key:name, className:'flex items-center gap-3'},
-          label ? React.createElement('span', {className:'badge badge-purple text-xs w-20 text-center'}, label) : null,
-          React.createElement('div', {className:'w-48 text-sm truncate'}, name),
-          React.createElement('div', {className:'flex-1 coverage-bar'},
-            React.createElement('div', {className:'coverage-fill', style:{
-              width: Math.max((decisions/mx)*100, decisions>0?5:0)+'%',
-              background: decisions===0?'#ef4444':decisions<2?'#f59e0b':'#22c55e'
-            }})
-          ),
-          React.createElement('div', {className:'w-8 text-right text-sm font-mono text-gray-400'}, decisions)
-        );
-
-      return React.createElement('div', null,
-        React.createElement('div', {className:'flex items-center justify-between mb-6'},
-          React.createElement('h2', {className:'text-xl font-bold'}, '🗺️ 知识覆盖地图'),
-          React.createElement('select', {className:'input', style:{width:'auto'}, value:sel, onChange:e=>setSel(e.target.value)},
-            repos.map(r => React.createElement('option', {key:r.repo, value:r.repo}, r.repo))
-          )
-        ),
-        data && React.createElement('div', null,
-          data.files.length > 0 && React.createElement('div', {className:'card mb-6'},
-            React.createElement('div', {className:'card-header'}, '📁 文件 ('+data.files.length+') ',
-              React.createElement('span', {className:'text-sm text-gray-400'}, data.files.filter(f=>f.decisions===0).length+' 个无覆盖')
-            ),
-            React.createElement('div', {className:'p-4 space-y-2'}, data.files.map(f => renderBar(f.name, f.decisions)))
-          ),
-          data.sql.length > 0 && React.createElement('div', {className:'card'},
-            React.createElement('div', {className:'card-header'}, '🗄️ SQL ('+data.sql.length+') ',
-              React.createElement('span', {className:'text-sm text-gray-400'}, data.sql.filter(s=>s.decisions===0).length+' 个无覆盖')
-            ),
-            React.createElement('div', {className:'p-4 space-y-2'}, data.sql.map(s => renderBar(s.name, s.decisions, s.type)))
-          )
-        )
-      );
-    }
-
-    function Graph() {
-      const [data, setData] = useState(null);
-      useEffect(() => { api('/api/graph').then(setData); }, []);
-      if (!data) return React.createElement('div', {className:'text-center py-12 text-gray-400'}, '加载中...');
-      const W=800, H=400, cx=W/2, cy=H/2, rad=140;
-      const pos = data.nodes.map((n,i) => {
-        const a = (2*Math.PI*i)/data.nodes.length - Math.PI/2;
-        return {...n, x:cx+rad*Math.cos(a), y:cy+rad*Math.sin(a)};
-      });
-      const nm = {}; pos.forEach(n => nm[n.id]=n);
-      const col = id => id.includes('website')?'#60a5fa':id.includes('shared')?'#c084fc':id.includes('infra')?'#fbbf24':'#4ade80';
-
-      return React.createElement('div', null,
-        React.createElement('h2', {className:'text-xl font-bold mb-6'}, '🌐 跨服务依赖图'),
-        React.createElement('div', {className:'card p-4'},
-          React.createElement('svg', {width:W, height:H, viewBox:'0 0 '+W+' '+H},
-            React.createElement('defs', null,
-              React.createElement('marker', {id:'arr', viewBox:'0 0 10 6', refX:10, refY:3, markerWidth:10, markerHeight:6, orient:'auto-start-reverse'},
-                React.createElement('path', {d:'M 0 0 L 10 3 L 0 6', fill:'#64748b'})
-              ),
-              React.createElement('marker', {id:'arr2', viewBox:'0 0 10 6', refX:10, refY:3, markerWidth:10, markerHeight:6, orient:'auto-start-reverse'},
-                React.createElement('path', {d:'M 0 0 L 10 3 L 0 6', fill:'#f59e0b'})
-              )
-            ),
-            data.edges.map((e,i) => {
-              const f=nm[e.from], t=nm[e.to]; if(!f||!t) return null;
-              const dx=t.x-f.x, dy=t.y-f.y, dist=Math.sqrt(dx*dx+dy*dy), r=36;
-              const sx=f.x+(dx/dist)*r, sy=f.y+(dy/dist)*r, ex=t.x-(dx/dist)*r, ey=t.y-(dy/dist)*r;
-              const isApi = e.type==='api';
-              return React.createElement('g', {key:i},
-                React.createElement('line', {x1:sx,y1:sy,x2:ex,y2:ey, stroke:isApi?'#f59e0b':'#64748b', strokeWidth:isApi?2:1.5, strokeDasharray:isApi?'6 3':'none', markerEnd:isApi?'url(#arr2)':'url(#arr)'}),
-                e.weight && React.createElement('text', {x:(sx+ex)/2, y:(sy+ey)/2-8, textAnchor:'middle', fill:'#94a3b8', fontSize:11}, e.weight)
-              );
-            }),
-            pos.map(n => React.createElement('g', {key:n.id},
-              React.createElement('circle', {cx:n.x, cy:n.y, r:32, fill:col(n.id), fillOpacity:0.15, stroke:col(n.id), strokeWidth:2}),
-              React.createElement('text', {x:n.x, y:n.y+1, textAnchor:'middle', fill:col(n.id), fontSize:11, fontWeight:600}, n.id.replace('biteme-','').replace('bite-me-','')),
-              React.createElement('text', {x:n.x, y:n.y+50, textAnchor:'middle', fill:'#94a3b8', fontSize:10}, n.size+' 实体')
-            ))
-          ),
-          React.createElement('div', {className:'flex gap-6 mt-4 justify-center text-sm text-gray-400'},
-            React.createElement('div', {className:'flex items-center gap-2'},
-              React.createElement('div', {style:{width:24,height:2,background:'#64748b'}}), '代码调用'),
-            React.createElement('div', {className:'flex items-center gap-2'},
-              React.createElement('div', {style:{width:24,height:0,borderTop:'2px dashed #f59e0b'}}), 'API 依赖')
-          )
-        ),
-        React.createElement('div', {className:'card mt-4'},
-          React.createElement('div', {className:'card-header'}, '连接详情'),
-          React.createElement('div', {className:'p-4 space-y-2'},
-            data.edges.map((e,i) => React.createElement('div', {key:i, className:'flex items-center gap-2 text-sm flex-wrap'},
-              React.createElement('span', {className:'font-medium'}, e.from), ' → ',
-              React.createElement('span', {className:'font-medium'}, e.to),
-              React.createElement('span', {className:'badge '+(e.type==='api'?'badge-yellow':'badge-blue')}, e.type==='api'?'API':e.weight+' calls'),
-              (e.descriptions||[]).map((d,j) => React.createElement('span', {key:j, className:'text-gray-400 text-xs'}, d))
-            ))
-          )
-        )
-      );
-    }
-
-    function App() {
-      const [tab, setTab] = useState('stats');
-      const tabs = [{id:'stats',label:'📊 概览'},{id:'business',label:'📝 业务上下文'},{id:'decisions',label:'💡 决策'},{id:'coverage',label:'🗺️ 覆盖'},{id:'graph',label:'🌐 依赖图'}];
-      return React.createElement('div', {className:'max-w-5xl mx-auto px-6 py-8'},
-        React.createElement('div', {className:'mb-8'},
-          React.createElement('h1', {className:'text-2xl font-bold'}, 'Context Knowledge Graph'),
-          React.createElement('p', {className:'text-sm text-gray-400 mt-1'}, 'grep 找的是代码写了什么，我们记录的是代码为什么这样写')
-        ),
-        React.createElement('div', {className:'flex gap-6 border-b border-gray-700 mb-8'},
-          tabs.map(t => React.createElement('button', {key:t.id, className:'pb-3 text-sm font-medium '+(tab===t.id?'tab-active':'tab-inactive'), onClick:()=>setTab(t.id)}, t.label))
-        ),
-        tab==='stats' && React.createElement(StatsPanel),
-        tab==='business' && React.createElement(BusinessContext),
-        tab==='decisions' && React.createElement(Decisions),
-        tab==='coverage' && React.createElement(Coverage),
-        tab==='graph' && React.createElement(Graph)
-      );
-    }
-    ReactDOM.render(React.createElement(App), document.getElementById('root'));
-  </script>
+// ── Business Context ────────────────────
+let bizLoaded = false, bizItems = []
+async function loadBiz() { bizLoaded = true; bizItems = await api('/api/business-context'); renderBiz() }
+function renderBiz() {
+  if (!bizItems.length) { document.getElementById('bizList').innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim)">No business context yet.</div>'; return }
+  document.getElementById('bizList').innerHTML = bizItems.map(item => `<div class="biz-card" onclick="editBizContext('${item.id}')"><div style="display:flex;justify-content:space-between;align-items:start"><div><div style="font-weight:600;margin-bottom:4px">${esc(item.summary)}</div><div style="font-size:13px;color:var(--text-dim);line-height:1.5">${esc(item.content).slice(0,200)}${item.content.length>200?'...':''}</div><div class="meta" style="margin-top:8px">${(item.keywords||[]).map(k=>`<span class="badge badge-blue">${esc(k)}</span>`).join('')}${(item.scope||[]).map(s=>`<span class="badge badge-purple">${esc(s)}</span>`).join('')}</div></div><button class="btn-danger" style="margin-left:12px;flex-shrink:0" onclick="event.stopPropagation();deleteBiz('${item.id}')">Delete</button></div></div>`).join('')
+}
+function newBizContext() { document.getElementById('bizEditId').value=''; document.getElementById('bizSummary').value=''; document.getElementById('bizContent').value=''; document.getElementById('bizKeywords').value=''; document.getElementById('bizScope').value=''; document.getElementById('bizForm').classList.remove('hidden') }
+function editBizContext(id) { const i=bizItems.find(x=>x.id===id); if(!i) return; document.getElementById('bizEditId').value=id; document.getElementById('bizSummary').value=i.summary; document.getElementById('bizContent').value=i.content; document.getElementById('bizKeywords').value=(i.keywords||[]).join(', '); document.getElementById('bizScope').value=(i.scope||[]).join(', '); document.getElementById('bizForm').classList.remove('hidden') }
+function closeBizForm() { document.getElementById('bizForm').classList.add('hidden') }
+async function saveBizContext() { const id=document.getElementById('bizEditId').value||undefined; await api('/api/business-context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,summary:document.getElementById('bizSummary').value,content:document.getElementById('bizContent').value,keywords:document.getElementById('bizKeywords').value.split(',').map(k=>k.trim()).filter(Boolean),scope:document.getElementById('bizScope').value.split(',').map(s=>s.trim()).filter(Boolean)})}); closeBizForm(); loadBiz() }
+async function deleteBiz(id) { if(!confirm('Delete?')) return; await api('/api/business-context/'+encodeURIComponent(id),{method:'DELETE'}); loadBiz() }
+</script>
 </body>
 </html>

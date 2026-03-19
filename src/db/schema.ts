@@ -32,12 +32,14 @@ const INDEXES: string[] = [
   `CREATE INDEX ON :CodeEntity(repo)`,
   `CREATE INDEX ON :CodeEntity(entity_type)`,
   `CREATE INDEX ON :CodeEntity(name)`,
+  `CREATE INDEX ON :CodeEntity(path)`,   // P0: path-based lookups (avoids index.ts collision)
 
   // ── DecisionContext ──────────────────────────
   `CREATE INDEX ON :DecisionContext(staleness)`,
   `CREATE INDEX ON :DecisionContext(owner)`,
   `CREATE INDEX ON :DecisionContext(created_at)`,
   `CREATE INDEX ON :DecisionContext(confidence)`,
+  `CREATE INDEX ON :DecisionContext(finding_type)`,
 
   // ── AggregatedSummary ─────────────────────────
   `CREATE INDEX ON :AggregatedSummary(scope)`,

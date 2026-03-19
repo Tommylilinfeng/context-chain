@@ -14,6 +14,7 @@
     "link:services": "node_modules/.bin/ts-node --transpile-only src/ingestion/link-services.ts",
     "parse:sql": "node_modules/.bin/ts-node --transpile-only src/ingestion/parse-sql.ts",
     "cold-start": "node_modules/.bin/ts-node --transpile-only src/ingestion/cold-start.ts",
+    "cold-start:v2": "node_modules/.bin/ts-node --transpile-only src/ingestion/cold-start-v2.ts",
     "mcp": "node_modules/.bin/ts-node --transpile-only src/mcp/server.ts",
     "dashboard": "node_modules/.bin/ts-node --transpile-only src/dashboard/server.ts"
   },
