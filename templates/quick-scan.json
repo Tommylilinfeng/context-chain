@@ -1,0 +1,10 @@
+{
+  "name": "Quick Scan",
+  "description": "快速扫描：只看函数本身，不看上下游。适合快速了解代码库概况。",
+  "extends": "_default",
+  "caller_depth": 0,
+  "callee_depth": 0,
+  "finding_types": ["decision"],
+  "max_decisions": 2,
+  "summary_length": "short"
+}

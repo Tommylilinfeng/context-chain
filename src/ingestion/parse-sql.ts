@@ -194,7 +194,10 @@ function extractRefsFromBody(body: string, fnId: string, fnName: string): void {
     for (const m of body.matchAll(pattern)) {
       const t = m[1].toLowerCase()
       // 排除 SQL 关键词、PL/pgSQL 变量（v_ / p_ 开头）、别名（单字母）
-      if (!SQL_KEYWORDS.has(t) && t.length > 2 && !t.startsWith('v_') && !t.startsWith('p_')) {
+      // 排除 set-returning 函数（FROM jsonb_array_elements(...) 不是表）
+      // 排除 Supabase schema 名（auth.users 的 auth 不是表）
+      if (!SQL_KEYWORDS.has(t) && t.length > 2 && !t.startsWith('v_') && !t.startsWith('p_')
+          && !SET_RETURNING_FNS.has(t) && !NON_PUBLIC_SCHEMAS.has(t)) {
         referencedTables.add(t)
       }
     }
@@ -296,6 +299,20 @@ function fallbackRegexParse(sql: string, file: string): void {
   console.log(`   正则提取 ${count} 个实体`)
 }
 
+// ── Set-returning 函数（会出现在 FROM 子句但不是表）─────
+
+const SET_RETURNING_FNS = new Set([
+  'jsonb_array_elements', 'jsonb_array_elements_text', 'jsonb_each',
+  'jsonb_each_text', 'jsonb_object_keys', 'jsonb_populate_recordset',
+  'json_array_elements', 'json_array_elements_text', 'json_each',
+  'unnest', 'generate_series', 'regexp_matches', 'regexp_split_to_table',
+  'now', 'current_timestamp',
+])
+
+// ── Supabase schema 名（不是 public 下的表）─────────────
+
+const NON_PUBLIC_SCHEMAS = new Set(['auth', 'storage', 'realtime', 'extensions', 'supabase_functions'])
+
 // ── SQL 关键词排除 ─────────────────────────────────────
 
 const SQL_KEYWORDS = new Set([
@@ -332,6 +349,12 @@ const SQL_BUILTINS = new Set([
   'row_number', 'rank', 'dense_rank', 'lag', 'lead',
   'pg_catalog', 'set_config', 'current_setting',
   'raise', 'found', 'tg_op', 'sqlerrm',
+  // 补充遗漏的 PG 内置函数
+  'random', 'substr', 'md5', 'clock_timestamp',
+  'jsonb_agg', 'jsonb_array_length', 'jsonb_array_elements_text',
+  'row_to_json', 'array', 'http_post', 'decimal',
+  // Supabase auth 函数（auth.uid() / auth.users 等）
+  'uid', 'users',
 ])
 
 // ── 输出 ────────────────────────────────────────────────
@@ -345,11 +368,39 @@ function writeOutput(): void {
   const uniqueEdges = new Map<string, CpgEdge>()
   for (const e of edges) uniqueEdges.set(`${e.caller_id}→${e.callee_id}→${e.edge_type ?? 'CALLS'}`, e)
 
+  // ── 后处理验证：只保留 callee 在已提取节点集合里的边 ──
+  // 这样可以干掉 PL/pgSQL 变量误判、表名单复数不匹配等问题
+  const nodeIdSet = new Set(uniqueNodes.keys())
+  const validEdges: CpgEdge[] = []
+  const droppedEdges: CpgEdge[] = []
+
+  for (const e of uniqueEdges.values()) {
+    if (nodeIdSet.has(e.caller_id) && nodeIdSet.has(e.callee_id)) {
+      validEdges.push(e)
+    } else {
+      droppedEdges.push(e)
+    }
+  }
+
+  if (droppedEdges.length > 0) {
+    console.log(`\n⚠️  后处理验证丢弃了 ${droppedEdges.length} 条边（目标节点不存在）：`)
+    const byReason = new Map<string, number>()
+    for (const e of droppedEdges) {
+      const missingCaller = !nodeIdSet.has(e.caller_id)
+      const missingCallee = !nodeIdSet.has(e.callee_id)
+      const missing = missingCaller ? e.caller_id : e.callee_id
+      byReason.set(missing, (byReason.get(missing) ?? 0) + 1)
+    }
+    for (const [id, count] of [...byReason.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`     ${id} (×${count})`)
+    }
+  }
+
   const output = {
     repo,
     source: 'sql-migrations',
     nodes: [...uniqueNodes.values()],
-    calls: [...uniqueEdges.values()],
+    calls: validEdges,
   }
 
   const outPath = path.resolve(outFile)

@@ -1,20 +1,39 @@
 {
-  "name": "decision-graph",
+  "name": "ctgraph",
   "version": "0.1.0",
-  "description": "决策知识图谱基础设施 - grep找的是写了什么，我们记录的是为什么这样写",
+  "description": "Context Knowledge Graph — MCP server for design decisions. grep finds what code does; CKG records why it was written that way.",
   "license": "Apache-2.0",
+  "bin": {
+    "ctgraph": "./bin/context-graph.js"
+  },
+  "files": [
+    "bin/",
+    "dist/mcp/",
+    "dist/db/client.js",
+    "dist/db/client.d.ts"
+  ],
   "scripts": {
     "setup": "bash scripts/setup.sh",
-    "build": "tsc",
+    "build": "tsc --noEmit",
+    "build:mcp": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build:mcp",
     "db:schema": "node_modules/.bin/ts-node src/db/schema.ts",
     "db:reset": "node_modules/.bin/ts-node src/db/reset.ts",
     "ingest:cpg": "node_modules/.bin/ts-node src/ingestion/ingest-cpg.ts",
     "ingest:sessions": "node_modules/.bin/ts-node --transpile-only src/ingestion/ingest-sessions.ts",
+    "ingest:sessions:v2": "node_modules/.bin/ts-node --transpile-only src/ingestion/ingest-sessions-v2.ts",
     "link:repos": "node_modules/.bin/ts-node --transpile-only src/ingestion/link-repos.ts",
     "link:services": "node_modules/.bin/ts-node --transpile-only src/ingestion/link-services.ts",
+    "link:tables": "node_modules/.bin/ts-node --transpile-only src/ingestion/link-tables.ts",
     "parse:sql": "node_modules/.bin/ts-node --transpile-only src/ingestion/parse-sql.ts",
     "cold-start": "node_modules/.bin/ts-node --transpile-only src/ingestion/cold-start.ts",
     "cold-start:v2": "node_modules/.bin/ts-node --transpile-only src/ingestion/cold-start-v2.ts",
+    "embed:decisions": "node_modules/.bin/ts-node --transpile-only src/ingestion/embed-decisions.ts",
+    "analyze": "node_modules/.bin/ts-node --transpile-only src/runners/analyze.ts",
+    "cleanup": "node_modules/.bin/ts-node --transpile-only src/runners/cleanup-sessions.ts",
+    "refine": "node_modules/.bin/ts-node --transpile-only src/ingestion/refine.ts",
+    "connect": "node_modules/.bin/ts-node --transpile-only src/runners/connect.ts",
+    "quota": "node_modules/.bin/ts-node --transpile-only scripts/check-quota.ts",
     "mcp": "node_modules/.bin/ts-node --transpile-only src/mcp/server.ts",
     "dashboard": "node_modules/.bin/ts-node --transpile-only src/dashboard/server.ts"
   },

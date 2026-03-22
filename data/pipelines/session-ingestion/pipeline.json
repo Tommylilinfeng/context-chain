@@ -1,0 +1,80 @@
+{
+  "id": "session-ingestion",
+  "name": "Session Ingestion",
+  "description": "从 Claude Code session 对话中提取设计决策。三阶段：预处理 → AI分段 → 深度提取。",
+  "rounds": [
+    {
+      "id": "segmentation",
+      "name": "Phase 1: Segmentation",
+      "shortName": "P1 Segment",
+      "description": "把整段对话分成逻辑段落，每段标注是否有决策",
+      "aiCalls": "1 call per session (or per chunk if session is large)",
+      "inputDesc": "压缩对话 + touchedFiles + 图谱函数 + business context",
+      "outputDesc": "{ startTurn, endTurn, summary, hasDecisions, decisionHints }[]",
+      "variables": [
+        { "name": "projectName", "description": "项目名称" },
+        { "name": "sessionStart", "description": "Session 开始时间" },
+        { "name": "sessionEnd", "description": "Session 结束时间" },
+        { "name": "businessContext", "description": "业务上下文，可能为空" },
+        { "name": "codeStructure", "description": "session 涉及的文件及其函数列表" },
+        { "name": "conversationText", "description": "压缩后的对话内容" }
+      ]
+    },
+    {
+      "id": "extraction",
+      "name": "Phase 2: Deep Extraction",
+      "shortName": "P2 Extract",
+      "description": "对每个批准的 segment 做深度决策提取",
+      "aiCalls": "1 call per approved segment",
+      "inputDesc": "原始对话段 + callers/callees 代码 + business context",
+      "outputDesc": "Decision[] — { function, file, summary, content, keywords, finding_type }",
+      "variables": [
+        { "name": "projectName", "description": "项目名称" },
+        { "name": "segmentSummary", "description": "Phase 1 生成的 segment 概要" },
+        { "name": "decisionHints", "description": "Phase 1 标注的决策线索" },
+        { "name": "businessContext", "description": "业务上下文" },
+        { "name": "codeStructure", "description": "涉及文件的函数列表 + 行号" },
+        { "name": "callerCalleeSection", "description": "上下游函数的完整代码" },
+        { "name": "conversationText", "description": "该段的原始对话内容" }
+      ]
+    },
+    {
+      "id": "grouping",
+      "name": "Phase 3a: Grouping",
+      "shortName": "P3a Group",
+      "description": "对所有新提取的决策做关系分组（复用 cold-start Round 4a）",
+      "aiCalls": "1 call total",
+      "inputDesc": "所有决策 summary + CPG call hints",
+      "outputDesc": "{ group: id[], reason }[]",
+      "variables": [
+        { "name": "decisionList", "description": "所有决策的摘要列表" },
+        { "name": "cpgSection", "description": "代码结构提示，可能为空" }
+      ]
+    },
+    {
+      "id": "relationship",
+      "name": "Phase 3b: Relationships",
+      "shortName": "P3b Edges",
+      "description": "对每组决策确定关系边（复用 cold-start Round 4b）",
+      "aiCalls": "1 call per group",
+      "inputDesc": "组内决策完整内容",
+      "outputDesc": "{ from, to, type, reason }[]",
+      "variables": [
+        { "name": "groupReason", "description": "为什么这些决策被分在一组" },
+        { "name": "decisionList", "description": "组内所有决策的完整内容" }
+      ]
+    },
+    {
+      "id": "keywordNormalization",
+      "name": "Phase 3c: Keyword Normalization",
+      "shortName": "P3c Keywords",
+      "description": "归一化同义关键词（复用 cold-start Round 4c）",
+      "aiCalls": "1 call total",
+      "inputDesc": "所有唯一关键词",
+      "outputDesc": "{ canonical, aliases }[]",
+      "variables": [
+        { "name": "keywordList", "description": "所有唯一关键词列表" }
+      ]
+    }
+  ]
+}

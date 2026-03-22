@@ -1,0 +1,10 @@
+src/
+data/
+scripts/
+joern/
+*.cpg.bin
+tsconfig.json
+tsconfig.build.json
+.env*
+KNOWN-ISSUES.md
+fix-sidebar.py

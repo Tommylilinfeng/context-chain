@@ -92,7 +92,34 @@ function collectSignals(repo: RepoConfig): ApiSignal[] {
     }
   }
 
-  // 4. 环境变量中的服务 URL
+  // 4. SQL function definitions (PostgreSQL RPC endpoints)
+  const migrationDirs = [
+    path.join(repoPath, 'supabase', 'migrations'),
+    path.join(repoPath, 'sql'),
+    path.join(repoPath, 'database', 'migrations'),
+  ]
+  for (const migDir of migrationDirs) {
+    if (fs.existsSync(migDir)) {
+      const sqlFiles = walkFiles(migDir, ['.sql'])
+      for (const file of sqlFiles) {
+        const content = fs.readFileSync(file, 'utf-8')
+        const relPath = path.relative(repoPath, file)
+        // Match CREATE [OR REPLACE] FUNCTION ["public".]"name"( or public.name( or name(
+        const fnMatches = content.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\(/gi)
+        for (const m of fnMatches) {
+          signals.push({
+            repo: repo.name,
+            type: 'endpoint_definition',
+            name: m[1],
+            file: relPath,
+            detail: `PostgreSQL RPC function: ${m[1]}`,
+          })
+        }
+      }
+    }
+  }
+
+  // 5. 环境变量中的服务 URL
   for (const envFile of ['.env', '.env.production', '.env.local']) {
     const envPath = path.join(repoPath, envFile)
     if (fs.existsSync(envPath)) {
@@ -119,6 +146,18 @@ function scanOutboundCalls(dir: string, repoName: string, repoRoot: string, sign
         name: m[1],
         file: relPath,
         detail: `supabase.functions.invoke('${m[1]}')`,
+      })
+    }
+
+    // supabase.rpc('xxx')
+    const rpcMatches = content.matchAll(/supabase\.rpc\(\s*['"]([^'"]+)['"]/g)
+    for (const m of rpcMatches) {
+      signals.push({
+        repo: repoName,
+        type: 'outbound_call',
+        name: m[1],
+        file: relPath,
+        detail: `supabase.rpc('${m[1]}')`,
       })
     }
 
@@ -214,7 +253,7 @@ interface InferredConnection {
   from_file: string
   to_repo: string
   to_endpoint: string
-  connection_type: 'api_call' | 'webhook' | 'edge_function' | 'message_queue' | 'shared_db'
+  connection_type: 'api_call' | 'webhook' | 'edge_function' | 'rpc' | 'message_queue' | 'shared_db'
   description: string
 }
 
@@ -241,12 +280,13 @@ ${signalText}
 Rules:
 - Only output connections where one repo's outbound call matches another repo's endpoint definition
 - "supabase.functions.invoke('xxx')" matches a Supabase Edge Function named 'xxx'
+- "supabase.rpc('xxx')" matches a PostgreSQL RPC function named 'xxx'
 - Webhook handlers are endpoints that receive calls from external services (e.g. Stripe)
 - Do NOT infer connections within the same repo
 - Do NOT guess connections that aren't supported by the signals above
 
 Return ONLY raw JSON (no markdown, no backticks):
-[{"from_repo":"repo-name","from_file":"path/to/file","to_repo":"repo-name","to_endpoint":"endpoint-name","connection_type":"api_call|webhook|edge_function|message_queue|shared_db","description":"brief explanation"}]
+[{"from_repo":"repo-name","from_file":"path/to/file","to_repo":"repo-name","to_endpoint":"endpoint-name","connection_type":"api_call|webhook|edge_function|rpc|message_queue|shared_db","description":"brief explanation"}]
 
 Return [] if no cross-service connections found.`
 }
@@ -284,17 +324,18 @@ async function writeConnections(connections: InferredConnection[]): Promise<numb
     await session.run(`MATCH ()-[r:DEPENDS_ON_API]->() DELETE r`)
 
     for (const conn of connections) {
-      // 用 MERGE 确保 service 节点存在（即使该 repo 的 CPG 还没导入）
+      // MERGE service 节点（确保存在），但 CREATE 独立的边（不合并）
       const result = await session.run(
         `MERGE (from_svc:CodeEntity {id: $fromId})
          ON CREATE SET from_svc.name = $fromName, from_svc.entity_type = 'service', from_svc.repo = $fromName
          MERGE (to_svc:CodeEntity {id: $toId})
          ON CREATE SET to_svc.name = $toName, to_svc.entity_type = 'service', to_svc.repo = $toName
-         MERGE (from_svc)-[r:DEPENDS_ON_API]->(to_svc)
-         SET r.connection_type = $connType,
-             r.description = $desc,
-             r.from_file = $fromFile,
-             r.to_endpoint = $toEndpoint
+         CREATE (from_svc)-[r:DEPENDS_ON_API {
+           connection_type: $connType,
+           description: $desc,
+           from_file: $fromFile,
+           to_endpoint: $toEndpoint
+         }]->(to_svc)
          RETURN from_svc.id, to_svc.id`,
         {
           fromId: `svc:${conn.from_repo}`,
@@ -344,6 +385,20 @@ async function linkServices(): Promise<void> {
     console.log('\n没有发现 API 信号。')
     return
   }
+
+  // 去重：同 repo + 同 name + 同 type 只保留一条
+  const seen = new Set<string>()
+  const deduped: ApiSignal[] = []
+  for (const s of allSignals) {
+    const key = `${s.repo}|${s.type}|${s.name}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      deduped.push(s)
+    }
+  }
+  console.log(`\n🔄 去重后：${deduped.length} 个信号（原 ${allSignals.length} 个）`)
+  allSignals.length = 0
+  allSignals.push(...deduped)
 
   // 保存信号到文件（方便调试）
   const signalFile = path.resolve(__dirname, '../../data/api-signals.json')

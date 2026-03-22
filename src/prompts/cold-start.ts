@@ -332,3 +332,23 @@ Return ONLY raw JSON (no markdown, no backticks):
 
 Return empty array [] if no normalization needed.`
 }
+
+// ─── PromptBuilders: 可插拔 prompt 模板集合 ────────────────────────────────
+
+export interface PromptBuilders {
+  scope: typeof buildScopePrompt
+  triage: typeof buildTriagePrompt
+  deepAnalysis: typeof buildDeepAnalysisPrompt
+  grouping: typeof buildGroupingPrompt
+  relationship: typeof buildRelationshipPrompt
+  keywordNormalization: typeof buildKeywordNormalizationPrompt
+}
+
+export const defaultPromptBuilders: PromptBuilders = {
+  scope: buildScopePrompt,
+  triage: buildTriagePrompt,
+  deepAnalysis: buildDeepAnalysisPrompt,
+  grouping: buildGroupingPrompt,
+  relationship: buildRelationshipPrompt,
+  keywordNormalization: buildKeywordNormalizationPrompt,
+}

@@ -1,8 +1,9 @@
 import neo4j, { Driver, Session } from 'neo4j-driver'
 
-// 支持通过环境变量指定端口（多项目场景下每个项目有自己的 Memgraph 实例）
+// 支持通过环境变量指定连接（多项目场景 / npx 远程连接）
+const host = process.env.CKG_MEMGRAPH_HOST || 'localhost'
 const port = process.env.CKG_MEMGRAPH_PORT || '7687'
-const uri = `bolt://localhost:${port}`
+const uri = process.env.CKG_MEMGRAPH_URI || `bolt://${host}:${port}`
 
 const driver: Driver = neo4j.driver(
   uri,

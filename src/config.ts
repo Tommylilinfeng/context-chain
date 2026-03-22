@@ -6,6 +6,7 @@
 
 import fs from 'fs'
 import path from 'path'
+import { AIConfig } from './ai/types'
 
 export interface RepoConfig {
   name: string
@@ -19,6 +20,7 @@ export interface RepoConfig {
 export interface ProjectConfig {
   project: string
   repos: RepoConfig[]
+  ai?: AIConfig
 }
 
 const CONFIG_PATH = path.resolve(__dirname, '../ckg.config.json')

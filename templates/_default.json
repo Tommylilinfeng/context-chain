@@ -1,0 +1,27 @@
+{
+  "name": "Default",
+  "description": "内置默认配置。所有自定义模板隐式继承此配置，只需 override 想改的字段。",
+  "caller_depth": 1,
+  "callee_depth": 1,
+  "max_callers_per_level": 8,
+  "max_callees_per_level": 8,
+  "include_cross_repo": false,
+  "include_table_access": false,
+
+  "target_code": "full",
+  "target_max_lines": 200,
+  "caller_code": "full",
+  "callee_code": "full",
+  "caller_max_lines": 100,
+  "callee_max_lines": 100,
+  "include_file_context": false,
+
+  "finding_types": ["decision", "suboptimal", "bug"],
+  "max_decisions": 3,
+  "summary_length": "medium",
+  "extract_keywords": true,
+  "language": "auto",
+
+  "include_business_context": true,
+  "timeout_ms": 120000
+}

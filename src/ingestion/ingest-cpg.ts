@@ -140,7 +140,20 @@ async function ingest(): Promise<void> {
         count += batch.length
         process.stdout.write(`\r   进度: ${Math.min(count, calls.length)}/${calls.length}`)
       }
-      console.log(`\n   ✅ ${edgeType}: ${count} 条`)
+
+      // 验证实际建了多少边（MATCH 找不到节点时会静默跳过）
+      const verifyResult = await session.run(
+        `MATCH (a:CodeEntity {repo: $repo})-[r:${edgeType}]->(b)
+         RETURN count(r) AS actual`,
+        { repo: data.repo }
+      )
+      const actual = verifyResult.records[0]?.get('actual')?.toNumber?.() ?? verifyResult.records[0]?.get('actual') ?? '?'
+      const skipped = calls.length - (typeof actual === 'number' ? actual : 0)
+      if (skipped > 0 && typeof actual === 'number') {
+        console.log(`\n   ✅ ${edgeType}: 尝试 ${calls.length} 条，实际建了 ${actual} 条（${skipped} 条被跳过，callee 节点不存在）`)
+      } else {
+        console.log(`\n   ✅ ${edgeType}: ${actual} 条`)
+      }
     }
 
     // 4. 保存外部调用

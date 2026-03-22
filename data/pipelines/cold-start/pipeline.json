@@ -1,0 +1,92 @@
+{
+  "id": "cold-start",
+  "name": "Cold Start (Goal-Targeted)",
+  "description": "针对特定目标，筛选文件 → 筛选函数 → 深度分析 → 关系提取。适合首次接入或有明确分析方向时使用。",
+  "rounds": [
+    {
+      "id": "scope",
+      "name": "Round 1: Scope Selection",
+      "shortName": "R1 Scope",
+      "description": "LLM picks which files are relevant to the analysis goal",
+      "aiCalls": "1 call per repo",
+      "inputDesc": "File list with functions and cross-file dependencies",
+      "outputDesc": "string[] — selected file paths",
+      "variables": [
+        { "name": "goal", "description": "用户的分析目标" },
+        { "name": "fileList", "description": "格式化的文件列表，含函数名和调用关系" }
+      ]
+    },
+    {
+      "id": "triage",
+      "name": "Round 2: Triage",
+      "shortName": "R2 Triage",
+      "description": "Per-file, identify which functions contain design decisions worth deep analysis",
+      "aiCalls": "1 call per file",
+      "inputDesc": "Full source code + function list with caller/callee deps + business context",
+      "outputDesc": "string[] — function names worth analyzing",
+      "variables": [
+        { "name": "goal", "description": "用户的分析目标" },
+        { "name": "businessContext", "description": "业务上下文（手动录入的 spec/背景），可能为空" },
+        { "name": "filePath", "description": "当前文件路径" },
+        { "name": "functionList", "description": "文件中的函数列表，含行号和调用关系" },
+        { "name": "code", "description": "完整源代码" }
+      ]
+    },
+    {
+      "id": "deepAnalysis",
+      "name": "Round 3: Deep Analysis",
+      "shortName": "R3 Deep",
+      "description": "Per-function, extract design decisions with full caller/callee code context",
+      "aiCalls": "1 call per function",
+      "inputDesc": "Target function code + upstream callers code + downstream callees code + business context",
+      "outputDesc": "Decision[] — { function, summary, content, keywords, finding_type }",
+      "variables": [
+        { "name": "goal", "description": "用户的分析目标" },
+        { "name": "businessContext", "description": "业务上下文，可能为空" },
+        { "name": "functionName", "description": "目标函数名" },
+        { "name": "filePath", "description": "目标函数所在文件" },
+        { "name": "functionCode", "description": "目标函数源代码" },
+        { "name": "callerSection", "description": "调用此函数的上游函数代码，可能为空" },
+        { "name": "calleeSection", "description": "此函数调用的下游函数代码，可能为空" }
+      ]
+    },
+    {
+      "id": "grouping",
+      "name": "Round 4a: Grouping",
+      "shortName": "R4a Group",
+      "description": "Cluster related decisions for relationship analysis",
+      "aiCalls": "1 call total",
+      "inputDesc": "All decision summaries + CPG call hints between decision functions",
+      "outputDesc": "{ group: id[], reason }[] — clusters of related decisions",
+      "variables": [
+        { "name": "decisionList", "description": "所有决策的摘要列表" },
+        { "name": "cpgSection", "description": "代码结构提示（哪些函数互相调用），可能为空" }
+      ]
+    },
+    {
+      "id": "relationship",
+      "name": "Round 4b: Relationships",
+      "shortName": "R4b Edges",
+      "description": "Per-group, determine edge types and direction between decisions",
+      "aiCalls": "1 call per group",
+      "inputDesc": "Full content of decisions in one group + group reason",
+      "outputDesc": "{ from, to, type, reason }[] — relationship edges",
+      "variables": [
+        { "name": "groupReason", "description": "为什么这些决策被分在一组" },
+        { "name": "decisionList", "description": "组内所有决策的完整内容" }
+      ]
+    },
+    {
+      "id": "keywordNormalization",
+      "name": "Round 4c: Keyword Normalization",
+      "shortName": "R4c Keywords",
+      "description": "Merge synonym keywords across all decisions",
+      "aiCalls": "1 call total",
+      "inputDesc": "All unique keywords from extracted decisions",
+      "outputDesc": "{ canonical, aliases }[] — keyword normalization rules",
+      "variables": [
+        { "name": "keywordList", "description": "所有唯一关键词列表" }
+      ]
+    }
+  ]
+}

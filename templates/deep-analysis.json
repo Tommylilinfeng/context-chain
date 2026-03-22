@@ -1,0 +1,12 @@
+{
+  "name": "Deep Analysis",
+  "description": "深度分析：看两层上下游完整代码，含数据库表访问。适合关键业务逻辑。",
+  "extends": "_default",
+  "caller_depth": 2,
+  "callee_depth": 2,
+  "include_table_access": true,
+  "include_cross_repo": true,
+  "include_file_context": true,
+  "max_decisions": 5,
+  "summary_length": "long"
+}
