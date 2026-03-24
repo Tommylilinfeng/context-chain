@@ -53,7 +53,20 @@
         </div>
         <div style="margin-bottom:12px">
           <label style="display:block;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Path</label>
-          <input type="text" id="repoPath" placeholder="/absolute/path/to/repo" style="width:100%;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
+          <div style="display:flex;gap:8px">
+            <input type="text" id="repoPath" placeholder="/absolute/path/to/repo" style="flex:1;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
+            <button class="btn-primary" onclick="openBrowseModal()" style="white-space:nowrap;padding:8px 16px;width:auto;min-width:80px">Browse…</button>
+          </div>
+          <!-- Browse modal -->
+          <div id="browseModal" style="display:none;margin-top:8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-0);max-height:320px;overflow:hidden;flex-direction:column">
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-subtle);background:var(--surface-1)">
+              <button class="btn-ghost" id="browseUpBtn" onclick="browseUp()" style="padding:4px 8px;font-size:12px">↑ Up</button>
+              <span id="browseCurrent" style="font-family:var(--mono);font-size:12px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span>
+              <button class="btn-ghost" onclick="selectBrowsePath()" style="padding:4px 10px;font-size:12px;color:var(--accent);border-color:var(--accent)">Select this folder</button>
+              <button class="btn-ghost" onclick="closeBrowseModal()" style="padding:4px 8px;font-size:12px">✕</button>
+            </div>
+            <div id="browseList" style="overflow-y:auto;max-height:260px;padding:4px 0"></div>
+          </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
           <div>
@@ -349,6 +362,61 @@ async function saveSysAI(){
     msg.textContent='Saved'
     setTimeout(()=>{msg.textContent=''},2000)
   }catch{}
+}
+
+// ── Browse filesystem modal ──────────────────────────
+let browseCurrentPath = ''
+
+async function openBrowseModal() {
+  const modal = document.getElementById('browseModal')
+  modal.style.display = 'flex'
+  const startPath = document.getElementById('repoPath').value.trim() || ''
+  await browseTo(startPath || '')
+}
+
+function closeBrowseModal() {
+  document.getElementById('browseModal').style.display = 'none'
+}
+
+function selectBrowsePath() {
+  document.getElementById('repoPath').value = browseCurrentPath
+  closeBrowseModal()
+}
+
+async function browseTo(dirPath) {
+  const list = document.getElementById('browseList')
+  list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:12px">Loading...</div>'
+  try {
+    const url = '/api/browse' + (dirPath ? '?path=' + encodeURIComponent(dirPath) : '')
+    const res = await fetch(url)
+    const data = await res.json()
+    if (!res.ok) { list.innerHTML = '<div style="padding:12px;color:var(--red);font-size:12px">' + esc(data.error) + '</div>'; return }
+
+    browseCurrentPath = data.current
+    document.getElementById('browseCurrent').textContent = data.current
+    document.getElementById('browseUpBtn').disabled = !data.parent
+    document.getElementById('browseUpBtn').dataset.parent = data.parent || ''
+
+    if (data.dirs.length === 0) {
+      list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:12px;font-style:italic">No subdirectories</div>'
+      return
+    }
+    list.innerHTML = data.dirs.map(d =>
+      `<div onclick="browseTo('${esc(d.path).replace(/'/g, "\\'")}')" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-family:var(--mono);border-bottom:1px solid var(--border-subtle);transition:background 0.1s" onmouseenter="this.style.background='var(--surface-2)'" onmouseleave="this.style.background=''" >` +
+        `<span style="opacity:0.5">${d.isRepo ? '📦' : '📁'}</span>` +
+        `<span style="flex:1">${esc(d.name)}</span>` +
+        (d.isRepo ? '<span class="badge badge-green" style="font-size:10px">repo</span>' : '') +
+        `<span style="opacity:0.3;font-size:11px">→</span>` +
+      `</div>`
+    ).join('')
+  } catch (e) {
+    list.innerHTML = '<div style="padding:12px;color:var(--red);font-size:12px">' + esc(e.message) + '</div>'
+  }
+}
+
+function browseUp() {
+  const parent = document.getElementById('browseUpBtn').dataset.parent
+  if (parent) browseTo(parent)
 }
 
 loadSystem()

@@ -807,7 +807,7 @@ function renderDecisions() {
     const stalenessLabel = d.staleness === 'code_changed' ? 'Code Changed' : d.staleness === 'code_removed' ? 'Code Removed' : 'Stale'
     const stalenessColor = d.staleness === 'code_removed' ? 'var(--red)' : 'var(--yellow)'
     const icon = type === 'bug' ? '' : type === 'suboptimal' ? '' : ''
-    const sourceLabel = {cold_start:'Quick Scan',cold_start_v2:'Quick Scan',claude_code_session:'Session',manual_business_context:'Business',analyze_function:'Run Analysis'}[d.source] || d.source
+    const sourceLabel = {cold_start:'Scan',cold_start_v2:'Scan',claude_code_session:'Session',manual_business_context:'Business',analyze_function:'Run Analysis'}[d.source] || d.source
 
     // Preview keywords (max 3)
     const kwPreview = (d.keywords || []).slice(0, 3).map(k =>

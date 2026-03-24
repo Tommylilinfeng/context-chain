@@ -414,6 +414,36 @@ app.get('/api/repos', async (c) => {
   }
 })
 
+// ── API: Browse filesystem ──────────────────────────────
+
+app.get('/api/browse', async (c) => {
+  const dirPath = c.req.query('path') || os.homedir()
+  try {
+    const absPath = path.resolve(dirPath)
+    if (!fs.existsSync(absPath)) {
+      return c.json({ error: 'Path does not exist' }, 404)
+    }
+    const stat = fs.statSync(absPath)
+    if (!stat.isDirectory()) {
+      return c.json({ error: 'Not a directory' }, 400)
+    }
+    const entries = fs.readdirSync(absPath, { withFileTypes: true })
+    const dirs = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+      .map(e => {
+        const fullPath = path.join(absPath, e.name)
+        const markers = ['package.json', 'pyproject.toml', 'go.mod', 'Cargo.toml', 'pom.xml', '.git']
+        const isRepo = markers.some(m => fs.existsSync(path.join(fullPath, m)))
+        return { name: e.name, path: fullPath, isRepo }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+    const parent = path.dirname(absPath)
+    return c.json({ current: absPath, parent: parent !== absPath ? parent : null, dirs })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 // ── API: Add / Delete repo ──────────────────────────────
 
 app.post('/api/repos', async (c) => {
@@ -425,7 +455,12 @@ app.post('/api/repos', async (c) => {
     }
 
     const configPath = path.resolve(__dirname, '../../ckg.config.json')
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    let raw: any
+    if (fs.existsSync(configPath)) {
+      raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    } else {
+      raw = { repos: [] }
+    }
     if (!raw.repos) raw.repos = []
 
     // Check for duplicate name

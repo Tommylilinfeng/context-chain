@@ -237,7 +237,7 @@
 
     <div class="info-box tip" style="margin-bottom:24px">
       <span class="info-box-label">Quick Start</span>
-      <span>Complete steps 1-5, then go to <a href="/scan" style="color:var(--accent);font-weight:600">Quick Scan</a> — select a repo and see design decisions automatically. No goal or business context needed.</span>
+      <span>Complete steps 1-5, then go to <a href="/run" style="color:var(--accent);font-weight:600">Run</a> to extract design decisions, then <a href="/group" style="color:var(--accent);font-weight:600">Group</a> to connect related decisions together.</span>
     </div>
 
     <div class="steps">
@@ -253,7 +253,7 @@
           <div class="code-block"><span class="code-lang">bash</span>npm install -g @anthropic-ai/claude-code
 claude login</div>
           <div class="step-desc">
-            Or switch to Anthropic API in the <a href="/scan">Quick Scan</a> page and enter your API key instead — no CLI needed.
+            Or switch to Anthropic API in the <a href="/system">System</a> page and enter your API key instead — no CLI needed.
           </div>
           <div class="status-checks" id="prereqChecks">
             <div class="status-check">
@@ -378,7 +378,7 @@ npm run db:schema && npm run ingest:all && npm run link:repos
         <div class="step-content">
           <div class="step-title">Extract Design Decisions</div>
           <div class="step-desc">
-            Use Scan to point at any code directory. The AI automatically identifies the most important files, reads your source code, and extracts design decisions, tradeoffs, and patterns. No configuration needed.
+            Go to <strong>Run</strong> to execute analysis pipelines on your repos. The AI reads your source code and extracts design decisions, tradeoffs, and patterns. Then use <strong>Group</strong> to connect related decisions together via batch comparison.
           </div>
           <div class="status-checks" id="decisionChecks">
             <div class="status-check">
@@ -387,7 +387,8 @@ npm run db:schema && npm run ingest:all && npm run link:repos
             </div>
           </div>
           <div class="step-actions">
-            <a href="/scan" class="step-btn step-btn-primary">Open Scan</a>
+            <a href="/run" class="step-btn step-btn-primary">Open Run</a>
+            <a href="/group" class="step-btn step-btn-ghost">Open Group</a>
           </div>
         </div>
       </div>
