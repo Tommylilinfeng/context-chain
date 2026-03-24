@@ -123,7 +123,17 @@ async function translateBatch(
     const parsed = parseJsonSafe<TranslatedDecision[]>(raw, [])
     // Validate: only return entries whose id we sent
     const sentIds = new Set(decisions.map(d => d.id))
-    return parsed.filter(p => sentIds.has(p.id))
+    const filtered = parsed.filter(p => sentIds.has(p.id))
+    // If large batch lost results, split and retry missing ones
+    if (filtered.length < decisions.length && decisions.length > 1) {
+      const gotIds = new Set(filtered.map(f => f.id))
+      const missing = decisions.filter(d => !gotIds.has(d.id))
+      if (missing.length > 0 && missing.length < decisions.length) {
+        const retried = await translateBatch(missing, locale, ai)
+        return [...filtered, ...retried]
+      }
+    }
+    return filtered
   } catch (err: any) {
     if (isTokenLimitError(err) && decisions.length > 1) {
       // Split in half and retry
@@ -183,8 +193,8 @@ export async function localizeDecisions(
   const {
     locale,
     repo,
-    batchSize = 20,
-    maxCharsPerBatch = 80_000,
+    batchSize = 5,
+    maxCharsPerBatch = 40_000,
     force = false,
     dryRun = false,
   } = options

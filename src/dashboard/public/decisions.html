@@ -874,7 +874,12 @@ function renderDecisions() {
               ${sourceLabel}
             </span>
             ${(d.scope || []).map(s => `<span style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">${esc(s)}</span>`).join('')}
+            <button class="translate-btn" id="tr-${esc(d.id)}" onclick="event.stopPropagation();translateDecision('${esc(d.id)}')" style="margin-left:auto;padding:4px 10px;font-size:11px;font-weight:600;border-radius:4px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-dim);cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all 0.15s" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+              ${d['summary_zh'] ? 'Re-translate' : 'Translate'}
+            </button>
           </div>
+          ${d['summary_zh'] ? '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-subtle)"><div class="detail-section-label">Chinese Translation</div><div style="font-size:13px;color:var(--text-secondary);line-height:1.7">' + esc(d['summary_zh']) + '</div>' + (d['content_zh'] ? '<div style="font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:6px">' + esc(d['content_zh']) + '</div>' : '') + '</div>' : ''}
         </div>`
     }
 
@@ -906,6 +911,33 @@ function renderDecisions() {
 }
 
 // ── Interactions ───────────────────────────────────
+async function translateDecision(id) {
+  const btn = document.getElementById('tr-' + id)
+  if (!btn) return
+  const origText = btn.innerHTML
+  btn.innerHTML = '<span style="opacity:0.6">Translating...</span>'
+  btn.disabled = true
+  try {
+    const res = await fetch('/api/localize/decision/' + encodeURIComponent(id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locale: 'zh' }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      btn.innerHTML = '<span style="color:var(--red)">Failed</span>'
+      setTimeout(() => { btn.innerHTML = origText; btn.disabled = false }, 2000)
+      return
+    }
+    // Reload decisions to show translation
+    btn.innerHTML = '<span style="color:var(--green)">Done!</span>'
+    setTimeout(() => { loadDecisions() }, 800)
+  } catch (e) {
+    btn.innerHTML = '<span style="color:var(--red)">Error</span>'
+    setTimeout(() => { btn.innerHTML = origText; btn.disabled = false }, 2000)
+  }
+}
+
 function toggleCard(id) {
   if (expandedIds.has(id)) {
     expandedIds.delete(id)

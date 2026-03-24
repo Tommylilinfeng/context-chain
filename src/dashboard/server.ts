@@ -2349,7 +2349,7 @@ app.post('/api/localize/start', async (c) => {
   }
 
   const body = await c.req.json()
-  const { locale = 'zh', repo, batchSize = 20, force = false } = body
+  const { locale = 'zh', repo, batchSize = 5, force = false } = body
 
   // Reset job
   localizeJob.status = 'running'

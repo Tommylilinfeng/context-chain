@@ -114,7 +114,7 @@
           </div>
           <div class="config-row">
             <label>Batch Size</label>
-            <input type="number" id="batchSizeInput" value="20" min="1" max="50" step="5">
+            <input type="number" id="batchSizeInput" value="5" min="1" max="20" step="1">
           </div>
           <div class="config-row">
             <label>Force</label>
@@ -316,7 +316,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           locale: locale(),
-          batchSize: parseInt(document.getElementById('batchSizeInput').value) || 20,
+          batchSize: parseInt(document.getElementById('batchSizeInput').value) || 5,
           force: document.getElementById('forceCheck').checked,
         }),
       })
