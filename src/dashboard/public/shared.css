@@ -329,7 +329,7 @@ select {
 .list-row .name { font-weight: 500; }
 .list-row .badges { display: flex; gap: 8px; }
 
-/* ── Log panel (shared by cold-start, run, system) ── */
+/* ── Log panel (shared by scan, run, system) ── */
 .log-panel {
   display: flex;
   flex-direction: column;

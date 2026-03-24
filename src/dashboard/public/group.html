@@ -101,6 +101,9 @@
       <!-- PENDING edge stats -->
       <div>
         <div class="section-title">Pending Comparisons</div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:10px">
+          Discovers relationships between decisions: <strong style="color:var(--text-secondary)">CAUSED_BY</strong>, <strong style="color:var(--text-secondary)">DEPENDS_ON</strong>, <strong style="color:var(--text-secondary)">CONFLICTS_WITH</strong>, and <strong style="color:var(--text-secondary)">CO_DECIDED</strong>.
+        </div>
         <div class="stat-grid">
           <div class="stat-card">
             <div class="stat-value blue" id="pendingCount">—</div>
@@ -188,6 +191,7 @@
       <button class="btn-stop" id="stopBtn" style="display:none">
         <span>■</span> Stop After Current Batch
       </button>
+      <div id="inlineError" style="display:none;font-size:12px;color:var(--red);background:rgba(240,86,86,0.06);border:1px solid rgba(240,86,86,0.15);border-radius:6px;padding:8px 12px;margin-top:8px;line-height:1.5"></div>
     </div>
 
     <!-- ── Right: Output ── -->
@@ -224,6 +228,8 @@
   let mode = 'summary'
   let batchSize = 50
   let stats = { pending: 0, total: 0, connected: 0, newDecisions: 0 }
+  let eventSource = null
+  let startTime = 0
 
   const batchSlider = document.getElementById('batchSlider')
   const batchValue = document.getElementById('batchValue')
@@ -245,23 +251,33 @@
     })
   })
 
-  // ── Refresh stats (placeholder — no backend yet) ──
+  // ── Refresh stats ──
   document.getElementById('refreshBtn').addEventListener('click', loadStats)
 
   async function loadStats() {
-    // TODO: fetch from /api/group/stats
-    // For now, show placeholder
-    document.getElementById('pendingCount').textContent = '—'
-    document.getElementById('decisionCount').textContent = '—'
-    document.getElementById('connectedEdges').textContent = '—'
-    document.getElementById('newDecisions').textContent = '—'
+    try {
+      const res = await fetch('/api/group/stats')
+      const data = await res.json()
+      if (res.ok) {
+        stats = data
+        document.getElementById('pendingCount').textContent = data.pending.toLocaleString()
+        document.getElementById('decisionCount').textContent = data.total.toLocaleString()
+        document.getElementById('connectedEdges').textContent = data.connected.toLocaleString()
+        document.getElementById('newDecisions').textContent = data.newDecisions.toLocaleString()
+      }
+    } catch {
+      document.getElementById('pendingCount').textContent = '—'
+      document.getElementById('decisionCount').textContent = '—'
+      document.getElementById('connectedEdges').textContent = '—'
+      document.getElementById('newDecisions').textContent = '—'
+    }
     updatePlan()
   }
 
   // ── Batch plan calculation ──
   function updatePlan() {
-    const M = stats.total - stats.newDecisions  // old decisions
-    const K = stats.newDecisions                 // new decisions
+    const M = stats.total - stats.newDecisions
+    const K = stats.newDecisions
     const B = batchSize
 
     if (K === 0 || B < 2) {
@@ -273,7 +289,18 @@
       return
     }
 
-    // Find optimal k
+    // Special case: all decisions are new (M=0) — just batch them together
+    if (M === 0) {
+      const batches = Math.ceil(K / B)
+      document.getElementById('planK').textContent = Math.min(K, B)
+      document.getElementById('planOld').textContent = 0
+      document.getElementById('planBatches').textContent = batches
+      document.getElementById('planCalls').textContent = batches
+      document.getElementById('planFormula').textContent =
+        `All ${K} decisions are new. ${batches} batch(es) of up to ${B} decisions each.`
+      return
+    }
+
     let bestK = 1, bestT = Infinity
     for (let k = 1; k <= Math.min(K, B - 1); k++) {
       const rounds = Math.ceil(M / (B - k))
@@ -286,25 +313,194 @@
     document.getElementById('planK').textContent = bestK
     document.getElementById('planOld').textContent = oldPerBatch
     document.getElementById('planBatches').textContent = bestT
-    document.getElementById('planCalls').textContent = bestT  // 1 LLM call per batch
+    document.getElementById('planCalls').textContent = bestT
     document.getElementById('planFormula').textContent =
-      `T(k=${bestK}) = ⌈${M}/${oldPerBatch}⌉ × ⌈${K}/${bestK}⌉ = ${bestT} batches\n` +
+      `T(k=${bestK}) = \u2308${M}/${oldPerBatch}\u2309 \u00d7 \u2308${K}/${bestK}\u2309 = ${bestT} batches\n` +
       `Each batch: ${bestK} new + ${oldPerBatch} old = ${B} decisions`
   }
 
-  // ── Start / Stop (placeholder) ──
-  document.getElementById('startBtn').addEventListener('click', () => {
-    // TODO: POST /api/group/start
-    console.log('Start grouping:', { mode, batchSize })
+  // ── Status ──
+  function setStatus(status) {
+    const badge = document.getElementById('statusBadge')
+    badge.textContent = status.toUpperCase()
+    badge.className = 'status-badge ' + status
+    document.getElementById('startBtn').style.display = status === 'running' ? 'none' : 'flex'
+    document.getElementById('stopBtn').style.display = status === 'running' ? 'flex' : 'none'
+  }
+
+  function updateElapsed() {
+    if (!startTime) return
+    const sec = Math.floor((Date.now() - startTime) / 1000)
+    const m = Math.floor(sec / 60), s = sec % 60
+    document.getElementById('elapsed').textContent = m > 0 ? `${m}m${s}s` : `${s}s`
+  }
+
+  function updateFooter(batchesDone, edgesFound) {
+    document.getElementById('batchesDone').textContent = `${batchesDone} batches`
+    document.getElementById('edgesFound').textContent = `${edgesFound} edges`
+  }
+
+  // ── Render batch item (dedup: track seen batch indices) ──
+  const seenBatches = new Set()
+
+  function addBatchItem(batch) {
+    // Dedup: skip if already rendered
+    if (seenBatches.has(batch.index)) return
+    seenBatches.add(batch.index)
+
+    const list = document.getElementById('batchList')
+    const empty = list.querySelector('.empty-state')
+    if (empty) empty.remove()
+
+    const item = document.createElement('div')
+    item.className = 'batch-item ' + batch.status
+    item.id = 'batch-' + batch.index
+    item.innerHTML = `
+      <div class="batch-header">
+        <span class="batch-num">Batch #${batch.index + 1}</span>
+        <span class="batch-status ${batch.status}">${batch.status}</span>
+      </div>
+      <div class="batch-composition">
+        <span>${batch.decisions || 0}</span> decisions &middot;
+        <span>${batch.groups || 0}</span> groups &middot;
+        <span>${batch.edges || 0}</span> edges found
+      </div>
+    `
+    list.appendChild(item)
+    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
+
+  // ── SSE ──
+  function connectSSE() {
+    if (eventSource) eventSource.close()
+    eventSource = new EventSource('/api/group/stream')
+
+    eventSource.addEventListener('group-done', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        // Show per-group progress in the batch list
+        const list = document.getElementById('batchList')
+        const empty = list.querySelector('.empty-state')
+        if (empty) empty.remove()
+
+        // Update or create a live progress item for the current batch
+        let liveItem = document.getElementById('live-batch')
+        if (!liveItem) {
+          liveItem = document.createElement('div')
+          liveItem.id = 'live-batch'
+          liveItem.className = 'batch-item active'
+          list.appendChild(liveItem)
+        }
+        liveItem.innerHTML = `
+          <div class="batch-header">
+            <span class="batch-num">Batch #${d.batch + 1}</span>
+            <span class="batch-status running">group ${d.group + 1}/${d.totalGroups}</span>
+          </div>
+          <div class="batch-composition" style="margin-top:4px;font-size:11px;color:var(--text-dim);line-height:1.5">
+            ${escHtml(d.reason)}
+          </div>
+        `
+        liveItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        document.getElementById('progressLabel').textContent = `Batch ${d.batch + 1} — group ${d.group + 1}/${d.totalGroups}`
+      } catch {}
+      updateElapsed()
+    })
+
+    eventSource.addEventListener('batch-done', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        // Remove live item — replace with final batch card
+        const liveItem = document.getElementById('live-batch')
+        if (liveItem) liveItem.remove()
+        addBatchItem({
+          index: d.batch,
+          status: 'done',
+          decisions: d.decisions,
+          groups: d.groups,
+          edges: d.edges,
+        })
+      } catch {}
+      updateElapsed()
+    })
+
+    eventSource.addEventListener('progress', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        updateFooter(d.batchesDone, d.edgesFound)
+        // Update progress bar — estimate from remaining PENDING
+        if (stats.pending > 0) {
+          const pct = Math.max(0, Math.min(100, (1 - d.pendingRemaining / stats.pending) * 100))
+          document.getElementById('progressBar').style.width = pct.toFixed(1) + '%'
+          document.getElementById('progressLabel').textContent = `Batch ${d.batchesDone}`
+          document.getElementById('progressPct').textContent = pct.toFixed(0) + '%'
+        }
+      } catch {}
+      updateElapsed()
+    })
+
+    eventSource.addEventListener('done', (e) => {
+      setStatus('done')
+      if (eventSource) { eventSource.close(); eventSource = null }
+      loadStats() // Refresh stats
+    })
+
+    eventSource.addEventListener('stopped', (e) => {
+      setStatus('idle')
+      if (eventSource) { eventSource.close(); eventSource = null }
+      loadStats()
+    })
+
+    eventSource.addEventListener('status', (e) => {
+      setStatus(e.data === 'done' ? 'done' : e.data === 'error' ? 'error' : 'idle')
+      if (e.data !== 'running') {
+        if (eventSource) { eventSource.close(); eventSource = null }
+      }
+    })
+
+    eventSource.onerror = () => {
+      if (eventSource) { eventSource.close(); eventSource = null }
+    }
+  }
+
+  function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+  // ── Start ──
+  document.getElementById('startBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('inlineError')
+    errEl.style.display = 'none'
+    try {
+      const res = await fetch('/api/group/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, batchSize }),
+      })
+      const data = await res.json()
+      if (!res.ok) { errEl.textContent = data.error || 'Failed to start'; errEl.style.display = 'block'; return }
+
+      setStatus('running')
+      startTime = Date.now()
+      seenBatches.clear()
+      document.getElementById('batchList').innerHTML = ''
+      document.getElementById('progressSection').style.display = 'block'
+      document.getElementById('progressBar').style.width = '0%'
+      document.getElementById('progressLabel').textContent = 'Starting...'
+      document.getElementById('progressPct').textContent = '0%'
+      updateFooter(0, 0)
+      connectSSE()
+    } catch (err) {
+      errEl.textContent = 'Failed to start: ' + err.message; errEl.style.display = 'block'
+    }
   })
 
-  document.getElementById('stopBtn').addEventListener('click', () => {
-    // TODO: POST /api/group/stop
-    console.log('Stop grouping')
+  // ── Stop ──
+  document.getElementById('stopBtn').addEventListener('click', async () => {
+    try {
+      await fetch('/api/group/stop', { method: 'POST' })
+    } catch {}
   })
 
   // ── Load config for word counts ──
-  fetch('/api/cold-start/config').then(r => r.json()).then(data => {
+  fetch('/api/scan/config').then(r => r.json()).then(data => {
     if (data.analysis) {
       document.getElementById('summaryWordsLabel').textContent = data.analysis.summaryWords || 30
       document.getElementById('contentWordsLabel').textContent = data.analysis.contentWords || 150

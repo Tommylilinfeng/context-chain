@@ -22,6 +22,7 @@ import path from 'path'
 import os from 'os'
 import { exec } from 'child_process'
 import { getSession, verifyConnectivity, closeDriver } from '../db/client'
+import { createPendingEdges } from './connect-decisions'
 import { queryGraphContext, formatGraphContext } from '../db/graphContext'
 import { Session } from 'neo4j-driver'
 
@@ -303,6 +304,9 @@ async function main() {
     const session = await getSession()
     try {
       const anchored = await batchWriteDecisions(session, allDecisions)
+      // Create PENDING edges so grouping pipeline can discover relationships
+      const newIds = allDecisions.map(d => d.id)
+      await createPendingEdges(session, newIds, { verbose: true })
       const writeTime = ((Date.now() - writeStart) / 1000).toFixed(1)
       console.log(`📝 写入完成: ${allDecisions.length} 条, ${anchored} 条锚定 (${writeTime}s)`)
     } finally {

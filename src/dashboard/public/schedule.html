@@ -212,9 +212,9 @@
             <span class="phase-desc">Cross-service linking</span>
           </label>
           <label class="phase-toggle">
-            <input type="checkbox" data-phase="cold-start" checked>
+            <input type="checkbox" data-phase="scan" checked>
             <span class="phase-num">4</span>
-            <span class="phase-name">Cold Start</span>
+            <span class="phase-name">Quick Scan</span>
             <span class="phase-desc">AI decision extraction</span>
           </label>
           <label class="phase-toggle">
@@ -230,7 +230,7 @@
 
       <!-- Goals -->
       <div>
-        <div class="section-title">Cold Start Goals</div>
+        <div class="section-title">Scan Goals</div>
         <div class="goal-list" id="goalList"></div>
         <div class="goal-add-row">
           <input type="text" id="goalInput" placeholder="Enter analysis goal...">
@@ -366,7 +366,7 @@
   }).catch(() => {})
 
   // Load repos
-  fetch('/api/cold-start/config').then(r => r.json()).then(data => {
+  fetch('/api/scan/config').then(r => r.json()).then(data => {
     const sel = document.getElementById('repoSelect')
     for (const repo of data.repos || []) {
       const opt = document.createElement('option')

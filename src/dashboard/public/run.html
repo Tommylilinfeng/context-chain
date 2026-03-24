@@ -3,136 +3,90 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CKG — Run Pipeline</title>
+<title>CKG — Run Analysis</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/shared.css">
 <style>
   .main { display:flex; flex-direction:column; height:100vh; }
+  .content-area { flex:1; display:grid; grid-template-columns:340px 1fr; overflow:hidden; min-height:0; }
 
-  .content-area {
-    flex: 1; display: grid; grid-template-columns: 380px 1fr;
-    overflow: hidden; min-height: 0;
-  }
-
-  /* ── Controls ───────────────────── */
+  /* ── Left: Controls ── */
   .controls {
-    border-right: 1px solid var(--border); padding: 20px;
-    display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+    border-right:1px solid var(--border); padding:20px;
+    display:flex; flex-direction:column; gap:16px; overflow-y:auto;
   }
   .section-title {
-    font-size: 11px; font-weight: 700; color: var(--text-dim);
-    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px;
+    font-size:11px; font-weight:700; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;
   }
-
-  /* ── Phase Toggles ──────────────── */
-  .phase-grid { display:flex; flex-direction:column; gap:6px; }
-  .phase-toggle {
-    display:flex; align-items:center; gap:10px; padding:8px 12px;
-    background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
-    cursor:pointer; transition:all 0.12s;
-  }
-  .phase-toggle:hover { border-color:var(--text-dim); }
-  .phase-toggle.disabled { opacity:0.4; }
-  .phase-toggle input[type="checkbox"] { width:16px; height:16px; accent-color:var(--accent); cursor:pointer; flex-shrink:0; }
-  .phase-toggle .phase-name { font-size:13px; font-weight:600; flex:1; }
-  .phase-toggle .phase-desc { font-size:11px; color:var(--text-dim); }
-  .phase-toggle .phase-num {
-    font-family:var(--mono); font-size:10px; color:var(--text-dim);
-    background:var(--surface-3); padding:2px 6px; border-radius:3px; flex-shrink:0;
-  }
-
-  .hint { font-size:11px; color:var(--text-dim); line-height:1.4; margin-top:2px; }
-
-  /* ── Goals ──────────────────────── */
-  .goal-list { display:flex; flex-direction:column; gap:6px; }
-  .goal-item {
-    display:flex; align-items:center; gap:8px; padding:6px 10px;
-    background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
-  }
-  .goal-item .goal-text { flex:1; font-size:13px; font-family:var(--mono); }
-  .goal-item .goal-remove {
-    background:none; border:none; color:var(--text-dim); font-size:16px;
-    cursor:pointer; padding:0 4px; line-height:1;
-  }
-  .goal-item .goal-remove:hover { color:var(--red); }
-  .goal-add-row { display:flex; gap:8px; }
-  .goal-add-row input { flex:1; }
-  .goal-add-row button {
-    padding:8px 14px; background:var(--surface-3); border:1px solid var(--border);
-    border-radius:6px; color:var(--text); font-size:13px; font-weight:600; cursor:pointer;
-    white-space:nowrap;
-  }
-  .goal-add-row button:hover { border-color:var(--accent); color:var(--accent); }
-  .suggestions { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
-  .suggestion {
-    font-size:11px; padding:3px 8px; border-radius:4px;
-    background:var(--surface-3); border:1px solid transparent;
-    color:var(--text-dim); cursor:pointer; transition:all 0.12s;
-  }
-  .suggestion:hover { border-color:var(--accent); color:var(--text); }
-
+  .divider { border:none; border-top:1px solid var(--border); margin:2px 0; }
   .btn-primary { width:100%; }
   .btn-stop { width:100%; }
 
-  /* ── Phase Progress ─────────────── */
-  .phase-progress {
-    display:flex; gap:0; padding:0 20px; border-bottom:1px solid var(--border);
+  /* Analysis config */
+  .config-row { display:flex; gap:12px; }
+  .config-row .field { flex:1; }
+  .config-row .field label {
+    display:block; font-size:11px; font-weight:700; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;
+  }
+  .config-row .field input {
+    width:100%; background:var(--surface-2); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); font-family:var(--mono);
+    font-size:14px; padding:9px 12px; text-align:center;
+  }
+  .config-row .field input:focus { outline:none; border-color:var(--accent); }
+  .hint { font-size:11px; color:var(--text-dim); line-height:1.4; margin-top:4px; }
+
+  /* ── Right: Output ── */
+  .output-area { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+
+  /* Progress header */
+  .progress-header {
+    padding:16px 20px; border-bottom:1px solid var(--border);
     background:var(--surface-0); flex-shrink:0;
   }
-  .phase-step {
-    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
-    padding:10px 8px; font-size:12px; font-weight:600; color:var(--text-dim);
-    position:relative; transition:all 0.2s;
-  }
-  .phase-step .step-num {
-    width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center;
-    font-family:var(--mono); font-size:10px; font-weight:700;
-    background:var(--surface-2); border:1px solid var(--border); flex-shrink:0;
-  }
-  .phase-step.active { color:var(--accent); }
-  .phase-step.active .step-num { background:#1e3a5f; border-color:var(--accent); color:var(--accent); }
-  .phase-step.done { color:var(--green); }
-  .phase-step.done .step-num { background:#14532d; border-color:var(--green); color:var(--green); }
-  .phase-step.error { color:var(--red); }
-  .phase-step.error .step-num { background:#450a0a; border-color:var(--red); color:var(--red); }
-  .phase-step.skipped { opacity:0.3; }
-  .phase-connector {
-    position:absolute; top:50%; right:0; width:100%; height:2px;
-    background:var(--border); z-index:0; transform:translateY(-50%);
+  .progress-stats { display:flex; gap:24px; margin-bottom:10px; }
+  .progress-stat .value { font-family:var(--mono); font-size:20px; font-weight:700; }
+  .progress-stat .value.blue { color:var(--accent); }
+  .progress-stat .value.green { color:var(--green); }
+  .progress-stat .label { font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .progress-bar-wrap { background:var(--surface-2); border-radius:4px; height:6px; overflow:hidden; }
+  .progress-bar { height:100%; background:var(--accent); border-radius:4px; transition:width 0.3s; }
+  .progress-current {
+    font-size:12px; color:var(--text-dim); margin-top:8px;
+    font-family:var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
 
-  /* ── Log Area ───────────────────── */
-  .log-area { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-  .log-output .line.phase { color:var(--cyan); font-weight:700; margin-top:8px; }
-  .log-output .line.step { color:var(--accent); font-weight:600; }
-  .log-output .line.detail { color:var(--text-dim); }
-
-  .divider { border:none; border-top:1px solid var(--border); margin:2px 0; }
-
-  /* ── History ────────────────────── */
-  .history-section { border-top:1px solid var(--border); padding:12px 20px; flex-shrink:0; }
-  .history-toggle {
-    display:flex; align-items:center; gap:8px; cursor:pointer;
-    font-size:12px; font-weight:600; color:var(--text-dim); padding:4px 0;
+  /* Function list */
+  .fn-list { flex:1; overflow-y:auto; padding:0; }
+  .fn-item {
+    display:flex; align-items:center; gap:12px;
+    padding:10px 20px; border-bottom:1px solid var(--border-subtle);
+    font-size:13px; transition:background 0.1s;
   }
-  .history-toggle:hover { color:var(--text); }
-  .history-toggle .arrow { transition:transform 0.2s; }
-  .history-toggle .arrow.open { transform:rotate(90deg); }
-  .history-list { max-height:200px; overflow-y:auto; margin-top:8px; }
-  .history-item {
-    display:flex; align-items:center; gap:10px; padding:6px 0;
-    border-bottom:1px solid var(--surface-3); font-family:var(--mono); font-size:11px;
+  .fn-item:hover { background:var(--surface-1); }
+  .fn-item.active { background:var(--accent-surface); }
+  .fn-item .fn-status { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .fn-item .fn-status.pending { background:var(--surface-3); }
+  .fn-item .fn-status.running { background:var(--accent); animation:pulse 1.5s infinite; }
+  .fn-item .fn-status.done { background:var(--green); }
+  .fn-item .fn-status.skipped { background:var(--text-dim); opacity:0.3; }
+  .fn-item .fn-status.error { background:var(--red); }
+  .fn-item .fn-name { font-family:var(--mono); font-weight:500; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fn-item .fn-file { font-size:11px; color:var(--text-dim); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fn-item .fn-decisions { font-family:var(--mono); font-size:11px; color:var(--green); min-width:20px; text-align:right; }
+
+  .empty-state { text-align:center; padding:60px 20px; color:var(--text-dim); }
+  .empty-state .icon { font-size:48px; margin-bottom:16px; opacity:0.3; }
+  .empty-state p { font-size:13px; line-height:1.6; max-width:320px; margin:0 auto; }
+
+  .log-footer {
+    border-top:1px solid var(--border); padding:8px 20px;
+    font-family:var(--mono); font-size:12px; color:var(--text-dim);
+    display:flex; gap:20px; flex-shrink:0;
   }
-  .history-item .hi-status { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-  .history-item .hi-status.done { background:var(--green); }
-  .history-item .hi-status.error { background:var(--red); }
-  .history-item .hi-date { color:var(--text-dim); width:100px; }
-  .history-item .hi-phases { color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .history-item .hi-duration { color:var(--text-dim); width:60px; text-align:right; }
-  .history-item .hi-tokens { color:var(--accent); width:70px; text-align:right; }
-  .history-chart { height:60px; display:flex; align-items:flex-end; gap:2px; margin:8px 0; }
-  .history-chart .bar { flex:1; min-width:4px; max-width:12px; border-radius:2px 2px 0 0; transition:height 0.3s; }
 </style>
 </head>
 <body>
@@ -142,160 +96,110 @@
 
 <div class="main">
   <div class="page-header">
-    <h2>Run Full Pipeline</h2>
+    <h2>Run Analysis</h2>
     <div class="status-badge idle" id="statusBadge">IDLE</div>
   </div>
 
   <div class="content-area">
-    <!-- ── Left: Controls ─────────── -->
-    <div class="controls" id="controlsPanel">
-      <!-- Phase Selection -->
+    <!-- ── Left: Controls ── -->
+    <div class="controls">
+
+      <!-- Repo -->
       <div>
-        <div class="section-title">Phases</div>
-        <div class="phase-grid" id="phaseGrid">
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="schema" checked>
-            <span class="phase-num">1</span>
-            <span class="phase-name">Schema</span>
-            <span class="phase-desc">Initialize indexes</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="ingest" checked>
-            <span class="phase-num">2</span>
-            <span class="phase-name">Ingest</span>
-            <span class="phase-desc">Import CPG</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="link" checked>
-            <span class="phase-num">3</span>
-            <span class="phase-name">Link</span>
-            <span class="phase-desc">Cross-service linking</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="cold-start" checked>
-            <span class="phase-num">4</span>
-            <span class="phase-name">Cold Start</span>
-            <span class="phase-desc">AI decision extraction</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="sessions" checked>
-            <span class="phase-num">5</span>
-            <span class="phase-name">Sessions</span>
-            <span class="phase-desc">Session decision ingestion</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="refine">
-            <span class="phase-num">6</span>
-            <span class="phase-name">Refine</span>
-            <span class="phase-desc">Staleness · anchors · keywords · gap detection</span>
-          </label>
-          <label class="phase-toggle">
-            <input type="checkbox" data-phase="embed">
-            <span class="phase-num">7</span>
-            <span class="phase-name">Embed</span>
-            <span class="phase-desc">Generate decision embeddings</span>
-          </label>
+        <div class="section-title">Repository</div>
+        <select id="repoSelect">
+          <option value="">Loading...</option>
+        </select>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Analysis Config -->
+      <div>
+        <div class="section-title">Analysis Output</div>
+        <div class="config-row">
+          <div class="field">
+            <label>Summary words</label>
+            <input type="number" id="summaryWords" value="30" min="10" max="100">
+          </div>
+          <div class="field">
+            <label>Content words</label>
+            <input type="number" id="contentWords" value="150" min="50" max="500">
+          </div>
+        </div>
+        <div class="hint">
+          Controls LLM output length per decision. Changes are saved to ckg.config.json.
         </div>
       </div>
 
       <hr class="divider">
 
-      <!-- Goals -->
+      <!-- Concurrency -->
       <div>
-        <div class="section-title">Cold Start Goals</div>
-        <div class="goal-list" id="goalList"></div>
-        <div class="goal-add-row">
-          <input type="text" id="goalInput" placeholder="Enter analysis goal...">
-          <button onclick="addGoal()">+ Add</button>
-        </div>
-        <div class="suggestions">
-          <span class="suggestion" onclick="addGoalDirect('order flow and payments')">Orders</span>
-          <span class="suggestion" onclick="addGoalDirect('coupon system')">Coupons</span>
-          <span class="suggestion" onclick="addGoalDirect('cart and customization')">Cart</span>
-          <span class="suggestion" onclick="addGoalDirect('menu and vendor availability')">Menu</span>
-          <span class="suggestion" onclick="addGoalDirect('auth and user profile')">Users</span>
-          <span class="suggestion" onclick="addGoalDirect('full business logic analysis')">All</span>
-        </div>
+        <div class="section-title">Concurrency</div>
+        <input type="number" id="concurrencyInput" value="2" min="1" max="8" style="width:80px;text-align:center;font-family:var(--mono);">
+        <div class="hint">Number of functions analyzed in parallel.</div>
       </div>
 
       <hr class="divider">
 
-      <!-- Parameters -->
-      <div class="row">
-        <div class="field">
-          <label>Repo</label>
-          <select id="repoSelect"><option value="">All repos</option></select>
-        </div>
-        <div class="field">
-          <label>Concurrency</label>
-          <input type="number" id="concurrencyInput" value="2" min="1" max="8">
-        </div>
-      </div>
-
-      <div class="row">
-        <div class="field">
-          <label>Owner</label>
-          <input type="text" id="ownerInput" value="me" placeholder="me">
-        </div>
-      </div>
-
-      <!-- Flags -->
-      <div>
-        <div class="checkbox-field">
-          <input type="checkbox" id="forceCheck">
-          <label for="forceCheck">Force — re-analyze all (ignore change detection)</label>
-        </div>
-        <div class="checkbox-field" style="margin-top:6px">
-          <input type="checkbox" id="deepCheck">
-          <label for="deepCheck">Deep check — re-analyze dependency changes too</label>
-        </div>
-        <div class="checkbox-field" style="margin-top:6px">
-          <input type="checkbox" id="dryRunCheck">
-          <label for="dryRunCheck">Dry run — no database writes</label>
-        </div>
-        <div class="checkbox-field" style="margin-top:6px">
-          <input type="checkbox" id="resetCheck">
-          <label for="resetCheck" style="color:var(--red)">Reset DB — wipe and rebuild</label>
-        </div>
-      </div>
-
-      <hr class="divider">
-
-      <!-- Action -->
-      <button class="btn-primary" id="startBtn" onclick="startPipeline()">
-        <span>&#9654;</span> Start Full Pipeline
+      <!-- Actions -->
+      <button class="btn-primary" id="startBtn">
+        <span>▶</span> Start Analysis
       </button>
-      <button class="btn-stop" id="stopBtn" onclick="stopPipeline()" style="display:none">
-        <span>&#9632;</span> Stop Pipeline
+      <button class="btn-stop" id="stopBtn" style="display:none">
+        <span>■</span> Stop After Current Function
       </button>
+      <div id="inlineError" style="display:none;font-size:12px;color:var(--red);background:rgba(240,86,86,0.06);border:1px solid rgba(240,86,86,0.15);border-radius:6px;padding:8px 12px;margin-top:8px;line-height:1.5"></div>
+
+      <hr class="divider">
+
+      <!-- Run info -->
+      <div id="runInfo" style="font-size:12px;color:var(--text-dim);line-height:1.6;">
+        Analyzes every function in the selected repo one by one. Each function is extracted, triaged, and deeply analyzed for design decisions. You can stop at any time — progress is saved. Next run continues from where you left off.
+      </div>
     </div>
 
-    <!-- ── Right: Output ──────────── -->
-    <div class="log-area">
-      <div class="phase-progress" id="phaseProgress"></div>
-      <div class="log-header">
-        <span>Pipeline Output</span>
-        <button class="btn-clear" onclick="clearLog()">Clear</button>
+    <!-- ── Right: Output ── -->
+    <div class="output-area">
+      <!-- Progress -->
+      <div class="progress-header" id="progressHeader">
+        <div class="progress-stats">
+          <div class="progress-stat">
+            <div class="value blue" id="analyzedCount">0</div>
+            <div class="label">Analyzed</div>
+          </div>
+          <div class="progress-stat">
+            <div class="value green" id="decisionsCount">0</div>
+            <div class="label">Decisions</div>
+          </div>
+          <div class="progress-stat">
+            <div class="value" id="totalCount" style="color:var(--text-dim)">0</div>
+            <div class="label">Total functions</div>
+          </div>
+          <div class="progress-stat">
+            <div class="value" id="skippedCount" style="color:var(--text-dim)">0</div>
+            <div class="label">Skipped</div>
+          </div>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progressBar" style="width:0%"></div>
+        </div>
+        <div class="progress-current" id="currentFunction">Select a repo and click Start</div>
       </div>
-      <div class="log-output" id="logOutput">
-        <div class="empty">Configure phases and goals, then click Start...</div>
+
+      <!-- Function list -->
+      <div class="fn-list" id="fnList">
+        <div class="empty-state">
+          <div class="icon">🔬</div>
+          <p>Select a repository and click "Start Analysis" to begin analyzing functions one by one.</p>
+        </div>
       </div>
+
       <div class="log-footer">
-        <span id="lineCount">0 lines</span>
-        <span id="elapsed">--</span>
-        <span id="tokenCount" title="Tokens consumed (parsed from pipeline output)">--</span>
-        <span id="currentPhaseLabel">--</span>
-      </div>
-      <div class="history-section">
-        <div class="history-toggle" onclick="toggleHistory()">
-          <span class="arrow" id="histArrow">▶</span>
-          Pipeline History
-          <span id="histCount" style="font-family:var(--mono);font-size:10px;color:var(--text-dim)"></span>
-        </div>
-        <div id="historyPanel" style="display:none">
-          <div class="history-chart" id="historyChart"></div>
-          <div class="history-list" id="historyList"></div>
-        </div>
+        <span id="elapsed">—</span>
+        <span id="tokenCount">—</span>
+        <span id="pendingEdges">—</span>
       </div>
     </div>
   </div>
@@ -303,384 +207,237 @@
 
 <script>
   // ── State ──
-  let goals = []
+  let isRunning = false
   let eventSource = null
-  let lines = 0
   let startTime = 0
-  let timerInterval = null
-  let activePhases = []
-  let totalTokens = 0
 
-  const logOutput = document.getElementById('logOutput')
-  const statusBadge = document.getElementById('statusBadge')
-  const startBtn = document.getElementById('startBtn')
-  const stopBtn = document.getElementById('stopBtn')
-  const lineCount = document.getElementById('lineCount')
-  const elapsedEl = document.getElementById('elapsed')
-  const currentPhaseLabel = document.getElementById('currentPhaseLabel')
-
-  // ── Init: load repos ──
-  fetch('/api/cold-start/config').then(r => r.json()).then(data => {
+  // ── Load config ──
+  fetch('/api/scan/config').then(r => r.json()).then(data => {
     const sel = document.getElementById('repoSelect')
-    for (const repo of data.repos || []) {
+    sel.innerHTML = ''
+    if (!data.repos || data.repos.length === 0) {
+      sel.innerHTML = '<option value="">No repos configured</option>'
+      return
+    }
+    for (const repo of data.repos) {
       const opt = document.createElement('option')
       opt.value = repo.name
       opt.textContent = `${repo.name} (${repo.type})`
       sel.appendChild(opt)
     }
-  }).catch(() => {})
-
-  // ── Goals management ──
-  function renderGoals() {
-    const list = document.getElementById('goalList')
-    list.innerHTML = ''
-    goals.forEach((g, i) => {
-      const div = document.createElement('div')
-      div.className = 'goal-item'
-      div.innerHTML = `<span class="goal-text">${escHtml(g)}</span><button class="goal-remove" onclick="removeGoal(${i})">&times;</button>`
-      list.appendChild(div)
-    })
-  }
-
-  function addGoal() {
-    const input = document.getElementById('goalInput')
-    const val = input.value.trim()
-    if (!val) return
-    goals.push(val)
-    input.value = ''
-    renderGoals()
-  }
-
-  function addGoalDirect(text) {
-    if (!goals.includes(text)) {
-      goals.push(text)
-      renderGoals()
+    if (data.analysis) {
+      document.getElementById('summaryWords').value = data.analysis.summaryWords || 30
+      document.getElementById('contentWords').value = data.analysis.contentWords || 150
     }
-  }
-
-  function removeGoal(idx) {
-    goals.splice(idx, 1)
-    renderGoals()
-  }
-
-  document.getElementById('goalInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); addGoal() }
+  }).catch(() => {
+    document.getElementById('repoSelect').innerHTML = '<option value="">Error loading config</option>'
   })
 
-  // ── Phase progress bar ──
-  const allPhasesMeta = [
-    { id: 'schema', label: 'Schema', num: '1' },
-    { id: 'ingest', label: 'Ingest', num: '2' },
-    { id: 'link', label: 'Link', num: '3' },
-    { id: 'cold-start', label: 'Cold Start', num: '4' },
-    { id: 'sessions', label: 'Sessions', num: '5' },
-    { id: 'refine', label: 'Refine', num: '6' },
-    { id: 'embed', label: 'Embed', num: '7' },
-  ]
-
-  function renderPhaseProgress(phases, completedPhases, currentPhase, errorPhase) {
-    const container = document.getElementById('phaseProgress')
-    container.innerHTML = ''
-    allPhasesMeta.forEach(pm => {
-      const step = document.createElement('div')
-      let cls = 'phase-step'
-      if (!phases.includes(pm.id)) cls += ' skipped'
-      else if (errorPhase === pm.id) cls += ' error'
-      else if (completedPhases.includes(pm.id)) cls += ' done'
-      else if (currentPhase === pm.id) cls += ' active'
-      step.className = cls
-      step.innerHTML = `<span class="step-num">${pm.num}</span>${pm.label}`
-      container.appendChild(step)
-    })
-  }
-
-  // Init empty progress
-  renderPhaseProgress([], [], null, null)
+  // Check if already running or finished with results
+  fetch('/api/run/status').then(r => r.json()).then(data => {
+    if (data.status === 'running') {
+      setStatus('running')
+      startTime = data.startedAt
+      updateCounters(data)
+      renderFunctionList(data.functions || [])
+      connectSSE()
+    } else if (data.status === 'done' || data.status === 'error') {
+      setStatus(data.status)
+      updateCounters(data)
+      if (data.functions && data.functions.length > 0) renderFunctionList(data.functions)
+      document.getElementById('currentFunction').textContent =
+        data.status === 'done' ? 'Analysis complete' : 'Analysis failed — check logs'
+    }
+  }).catch(() => {})
 
   // ── Status ──
   function setStatus(status) {
-    statusBadge.textContent = status.toUpperCase()
-    statusBadge.className = 'status-badge ' + status
-    startBtn.style.display = status === 'running' ? 'none' : 'flex'
-    stopBtn.style.display = status === 'running' ? 'flex' : 'none'
+    const badge = document.getElementById('statusBadge')
+    badge.textContent = status.toUpperCase()
+    badge.className = 'status-badge ' + status
+    document.getElementById('startBtn').style.display = status === 'running' ? 'none' : 'flex'
+    document.getElementById('stopBtn').style.display = status === 'running' ? 'flex' : 'none'
+    isRunning = status === 'running'
   }
 
-  // ── Timer ──
-  function startTimer() {
-    startTime = Date.now()
-    timerInterval = setInterval(() => {
-      const sec = Math.floor((Date.now() - startTime) / 1000)
-      const min = Math.floor(sec / 60)
-      elapsedEl.textContent = min > 0 ? `${min}m ${sec%60}s` : `${sec}s`
-    }, 1000)
-  }
-  function stopTimer() { if (timerInterval) { clearInterval(timerInterval); timerInterval = null } }
-
-  // ── Log ──
-  function classifyLine(text) {
-    if (text.includes('Phase:')) return 'phase'
-    if (text.match(/^\s*\[\d+\/\d+\]/)) return 'step'
-    if (text.includes('\u2713') || text.includes('done') || text.includes('complete') || text.includes('finished')) return 'success'
-    if (text.includes('\u274c') || text.includes('failed') || text.includes('error')) return 'error'
-    if (text.includes('Skipping') || text.includes('WARNING') || text.includes('falling back')) return 'warn'
-    if (text.startsWith('    ')) return 'detail'
-    return ''
+  function updateCounters(data) {
+    document.getElementById('analyzedCount').textContent = data.analyzed || 0
+    document.getElementById('decisionsCount').textContent = data.decisions || 0
+    document.getElementById('totalCount').textContent = data.total || 0
+    document.getElementById('skippedCount').textContent = data.skipped || 0
+    const total = data.total || 1
+    const done = (data.analyzed || 0) + (data.skipped || 0)
+    document.getElementById('progressBar').style.width = (done / total * 100).toFixed(1) + '%'
   }
 
-  function parseTokens(text) {
-    // Match patterns like "tokens: 1234", "1234 tokens", "token_count=1234", "input_tokens: 500 output_tokens: 200"
-    const patterns = [
-      /(\d[\d,]+)\s*tokens/gi,
-      /tokens[:\s=]+(\d[\d,]+)/gi,
-      /input_tokens[:\s=]+(\d[\d,]+)/gi,
-      /output_tokens[:\s=]+(\d[\d,]+)/gi,
-      /budget[:\s]+(\d[\d,]+)\s*\/\s*(\d[\d,]+)/gi,
-    ]
-    let found = 0
-    for (const pat of patterns) {
-      let m; while ((m = pat.exec(text)) !== null) { found += parseInt(m[1].replace(/,/g, '')) || 0 }
+  function updateElapsed() {
+    if (!startTime) return
+    const sec = Math.floor((Date.now() - startTime) / 1000)
+    const m = Math.floor(sec / 60), s = sec % 60
+    document.getElementById('elapsed').textContent = m > 0 ? `${m}m${s}s` : `${s}s`
+  }
+
+  // ── Render function list (indexed for O(1) updates) ──
+  const fnItemMap = new Map()  // index → DOM element
+
+  function renderFunctionList(fns) {
+    const list = document.getElementById('fnList')
+    if (!fns || fns.length === 0) return
+    fnItemMap.clear()
+    list.innerHTML = fns.map((fn, i) => renderFnItem(fn, i)).join('')
+    // Build index map
+    const items = list.querySelectorAll('.fn-item')
+    items.forEach((el, i) => fnItemMap.set(i, el))
+  }
+
+  function updateFnItem(index, status, decisions) {
+    const item = fnItemMap.get(index)
+    if (!item) return
+    const dot = item.querySelector('.fn-status')
+    dot.className = 'fn-status ' + status
+    item.className = 'fn-item' + (status === 'running' ? ' active' : '')
+    if (decisions > 0) {
+      item.querySelector('.fn-decisions').textContent = decisions
     }
-    return found
+    if (status === 'running') item.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
 
-  function appendLog(text) {
-    if (logOutput.querySelector('.empty')) logOutput.innerHTML = ''
-    const div = document.createElement('div')
-    div.className = 'line ' + classifyLine(text)
-    div.textContent = text
-    logOutput.appendChild(div)
-    logOutput.scrollTop = logOutput.scrollHeight
-    lines++
-    lineCount.textContent = lines + ' lines'
-    // Track token usage
-    const t = parseTokens(text)
-    if (t > 0) {
-      totalTokens += t
-      document.getElementById('tokenCount').textContent = totalTokens >= 1000 ? (totalTokens / 1000).toFixed(1) + 'k tokens' : totalTokens + ' tokens'
-    }
-  }
+  // ── SSE Connection (with dedup: track highest analyzed count to skip replayed events) ──
+  let lastSeenAnalyzed = -1
 
-  function clearLog() {
-    logOutput.innerHTML = '<div class="empty">Configure phases and goals, then click Start...</div>'
-    lines = 0; lineCount.textContent = '0 lines'; elapsedEl.textContent = '--'
-    currentPhaseLabel.textContent = '--'; totalTokens = 0
-    document.getElementById('tokenCount').textContent = '--'
-    renderPhaseProgress([], [], null, null)
-  }
+  function connectSSE() {
+    if (eventSource) eventSource.close()
+    eventSource = new EventSource('/api/run/stream')
 
-  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
-
-  // ── Pipeline control ──
-  function getSkipPhases() {
-    const skip = []
-    document.querySelectorAll('#phaseGrid input[type="checkbox"]').forEach(cb => {
-      if (!cb.checked) skip.push(cb.dataset.phase)
+    eventSource.addEventListener('function-start', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        updateFnItem(d.index, 'running', 0)
+        document.getElementById('currentFunction').textContent = `Analyzing ${d.name} (${d.file})`
+      } catch {}
+      updateElapsed()
     })
-    return skip
-  }
 
-  function getEnabledPhases() {
-    const enabled = []
-    document.querySelectorAll('#phaseGrid input[type="checkbox"]').forEach(cb => {
-      if (cb.checked) enabled.push(cb.dataset.phase)
+    eventSource.addEventListener('function-done', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        updateFnItem(d.index, 'done', d.decisions)
+      } catch {}
     })
-    return enabled
-  }
 
-  async function startPipeline() {
-    const enabledPhases = getEnabledPhases()
-    if (enabledPhases.length === 0) { alert('Please enable at least one phase'); return }
+    eventSource.addEventListener('function-error', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        updateFnItem(d.index, 'error', 0)
+      } catch {}
+    })
 
-    if (enabledPhases.includes('cold-start') && goals.length === 0) {
-      if (!confirm('Cold Start phase is enabled but no goals added. Continue without decision extraction?')) return
-    }
+    eventSource.addEventListener('progress', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        // Dedup: skip if this is a replayed older event
+        if (d.analyzed <= lastSeenAnalyzed) return
+        lastSeenAnalyzed = d.analyzed
+        updateCounters(d)
+      } catch {}
+      updateElapsed()
+    })
 
-    if (document.getElementById('resetCheck').checked) {
-      if (!confirm('WARNING: This will DELETE ALL DATA in the database. Are you sure?')) return
-    }
+    eventSource.addEventListener('done', (e) => {
+      setStatus('done')
+      document.getElementById('currentFunction').textContent = 'Analysis complete'
+      eventSource.close()
+      eventSource = null
+    })
 
-    const config = {
-      goals,
-      concurrency: parseInt(document.getElementById('concurrencyInput').value) || 2,
-      owner: document.getElementById('ownerInput').value.trim() || 'me',
-      repo: document.getElementById('repoSelect').value || null,
-      force: document.getElementById('forceCheck').checked,
-      deepCheck: document.getElementById('deepCheck').checked,
-      dryRun: document.getElementById('dryRunCheck').checked,
-      skipPhases: getSkipPhases(),
-      reset: document.getElementById('resetCheck').checked,
-    }
+    eventSource.addEventListener('stopped', (e) => {
+      setStatus('idle')
+      document.getElementById('currentFunction').textContent = 'Stopped. Progress saved — next run continues from here.'
+      eventSource.close()
+      eventSource = null
+    })
 
-    logOutput.innerHTML = ''
-    lines = 0; lineCount.textContent = '0 lines'
-    activePhases = enabledPhases
-    renderPhaseProgress(enabledPhases, [], null, null)
-    setStatus('running')
-    startTimer()
+    eventSource.addEventListener('error', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        document.getElementById('currentFunction').textContent = 'Error: ' + (d.error || 'Unknown error')
+      } catch {}
+    })
 
-    try {
-      const res = await fetch('/api/full-pipeline/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        appendLog('\u274c ' + (err.error || 'Failed to start'))
-        setStatus('error'); stopTimer()
-        return
-      }
-
-      // Start SSE
-      if (eventSource) eventSource.close()
-      eventSource = new EventSource('/api/full-pipeline/stream')
-
-      eventSource.addEventListener('log', e => {
-        const data = JSON.parse(e.data)
-        appendLog(data.log)
-        // Update phase progress
-        if (data.phase) currentPhaseLabel.textContent = `Phase: ${data.phase}`
-        renderPhaseProgress(activePhases, data.completedPhases || [], data.phase, null)
-      })
-
-      eventSource.addEventListener('status', e => {
-        const finalStatus = e.data
-        setStatus(finalStatus)
-        stopTimer()
-        if (finalStatus === 'done') {
-          renderPhaseProgress(activePhases, activePhases, null, null)
-          currentPhaseLabel.textContent = 'Complete'
-        } else if (finalStatus === 'error') {
-          currentPhaseLabel.textContent = 'Error'
-        }
+    eventSource.addEventListener('status', (e) => {
+      setStatus(e.data === 'done' ? 'done' : e.data === 'error' ? 'error' : 'idle')
+      if (e.data !== 'running') {
         eventSource.close()
         eventSource = null
-      })
-
-      eventSource.onerror = () => {
-        setStatus('error'); stopTimer()
-        if (eventSource) { eventSource.close(); eventSource = null }
       }
+    })
 
-    } catch (err) {
-      appendLog('\u274c ' + err.message)
-      setStatus('error'); stopTimer()
-    }
-  }
-
-  async function stopPipeline() {
-    try {
-      await fetch('/api/full-pipeline/stop', { method: 'POST' })
-      setStatus('idle'); stopTimer()
+    eventSource.onerror = () => {
+      // SSE connection lost
       if (eventSource) { eventSource.close(); eventSource = null }
-    } catch {}
+    }
   }
 
-  // ── History ──
-  let historyOpen = false
+  // ── Start ──
+  document.getElementById('startBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('inlineError')
+    errEl.style.display = 'none'
+    const repo = document.getElementById('repoSelect').value
+    if (!repo) { errEl.textContent = 'Please select a repository first.'; errEl.style.display = 'block'; return }
 
-  function toggleHistory() {
-    historyOpen = !historyOpen
-    document.getElementById('historyPanel').style.display = historyOpen ? 'block' : 'none'
-    document.getElementById('histArrow').className = 'arrow' + (historyOpen ? ' open' : '')
-    if (historyOpen) loadHistory()
-  }
+    const payload = {
+      repo,
+      summaryWords: parseInt(document.getElementById('summaryWords').value),
+      contentWords: parseInt(document.getElementById('contentWords').value),
+      concurrency: parseInt(document.getElementById('concurrencyInput').value) || 2,
+    }
 
-  async function loadHistory() {
     try {
-      const res = await fetch('/api/pipeline/history?limit=30')
+      const res = await fetch('/api/run/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
       const data = await res.json()
-      document.getElementById('histCount').textContent = data.length + ' runs'
-      renderHistory(data)
-    } catch {}
-  }
+      if (!res.ok) { errEl.textContent = data.error || 'Failed to start'; errEl.style.display = 'block'; return }
 
-  function fmtDuration(ms) {
-    const s = Math.floor(ms / 1000)
-    return s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's'
-  }
-
-  function renderHistory(data) {
-    // Chart: token usage bars
-    const chart = document.getElementById('historyChart')
-    const maxTokens = Math.max(...data.map(d => d.tokenEstimate || 0), 1)
-    chart.innerHTML = data.slice(0, 20).reverse().map(d => {
-      const h = Math.max((d.tokenEstimate / maxTokens) * 60, 2)
-      const color = d.status === 'done' ? 'var(--green)' : 'var(--red)'
-      const title = new Date(d.startedAt).toLocaleDateString() + ' — ' + (d.tokenEstimate || 0) + ' tokens'
-      return `<div class="bar" style="height:${h}px;background:${color}" title="${escHtml(title)}"></div>`
-    }).join('')
-
-    // List
-    const list = document.getElementById('historyList')
-    list.innerHTML = data.map(d => {
-      const date = new Date(d.startedAt)
-      const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-      const tokens = d.tokenEstimate >= 1000 ? (d.tokenEstimate / 1000).toFixed(1) + 'k' : (d.tokenEstimate || 0)
-      return `<div class="history-item">
-        <span class="hi-status ${d.status}"></span>
-        <span class="hi-date">${dateStr}</span>
-        <span class="hi-phases">${(d.phases || []).join(' → ')}</span>
-        <span class="hi-duration">${fmtDuration(d.duration || 0)}</span>
-        <span class="hi-tokens">${tokens} tok</span>
-      </div>`
-    }).join('')
-
-    if (data.length === 0) {
-      list.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:12px;font-size:11px">No pipeline runs yet</div>'
-    }
-  }
-
-  // Load history count on init
-  fetch('/api/pipeline/history?limit=5').then(r => r.json()).then(data => {
-    document.getElementById('histCount').textContent = data.length > 0 ? data.length + '+ runs' : ''
-  }).catch(() => {})
-
-  // ── Restore state on page load ──
-  fetch('/api/full-pipeline/status').then(r => r.json()).then(data => {
-    if (data.status === 'running') {
       setStatus('running')
-      startTime = data.startedAt; startTimer()
-      activePhases = data.phases || []
-      renderPhaseProgress(activePhases, data.completedPhases || [], data.currentPhase, null)
-      if (data.currentPhase) currentPhaseLabel.textContent = `Phase: ${data.currentPhase}`
+      startTime = Date.now()
+      document.getElementById('currentFunction').textContent = 'Starting analysis...'
+      document.getElementById('fnList').innerHTML = ''
 
-      // Restore config to UI
-      if (data.config) {
-        goals = data.config.goals || []
-        renderGoals()
-        if (data.config.repo) document.getElementById('repoSelect').value = data.config.repo
-        document.getElementById('concurrencyInput').value = data.config.concurrency || 2
-        document.getElementById('ownerInput').value = data.config.owner || 'me'
-        document.getElementById('forceCheck').checked = !!data.config.force
-        document.getElementById('deepCheck').checked = !!data.config.deepCheck
-        document.getElementById('dryRunCheck').checked = !!data.config.dryRun
+      // Wait a moment for the function list to populate, then load status
+      setTimeout(async () => {
+        const status = await fetch('/api/run/status').then(r => r.json())
+        renderFunctionList(status.functions || [])
+        updateCounters(status)
+      }, 500)
 
-        // Uncheck skipped phases
-        for (const sp of data.config.skipPhases || []) {
-          const cb = document.querySelector(`#phaseGrid input[data-phase="${sp}"]`)
-          if (cb) cb.checked = false
-        }
-      }
-
-      // Connect to SSE stream
-      eventSource = new EventSource('/api/full-pipeline/stream')
-      eventSource.addEventListener('log', e => {
-        const d = JSON.parse(e.data)
-        appendLog(d.log)
-        if (d.phase) currentPhaseLabel.textContent = `Phase: ${d.phase}`
-        renderPhaseProgress(activePhases, d.completedPhases || [], d.phase, null)
-      })
-      eventSource.addEventListener('status', e => {
-        setStatus(e.data); stopTimer()
-        if (e.data === 'done') {
-          renderPhaseProgress(activePhases, activePhases, null, null)
-          currentPhaseLabel.textContent = 'Complete'
-        }
-        eventSource.close(); eventSource = null
-      })
+      connectSSE()
+    } catch (err) {
+      errEl.textContent = 'Failed to start: ' + err.message; errEl.style.display = 'block'
     }
-  }).catch(() => {})
+  })
+
+  // ── Stop ──
+  document.getElementById('stopBtn').addEventListener('click', async () => {
+    try {
+      await fetch('/api/run/stop', { method: 'POST' })
+      document.getElementById('currentFunction').textContent = 'Stopping after current function...'
+    } catch {}
+  })
+
+  // ── Helper: render a function item ──
+  function renderFnItem(fn, idx) {
+    return `<div class="fn-item ${fn.status === 'running' ? 'active' : ''}" data-idx="${idx}">
+      <span class="fn-status ${fn.status}"></span>
+      <span class="fn-name">${escHtml(fn.name)}</span>
+      <span class="fn-file">${escHtml(fn.file)}</span>
+      <span class="fn-decisions">${fn.decisions > 0 ? fn.decisions : ''}</span>
+    </div>`
+  }
+
+  function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 </script>
 </body>
 </html>

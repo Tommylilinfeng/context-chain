@@ -31,6 +31,15 @@ import { parseJsonSafe, runWithConcurrency } from './shared'
 
 // ── Types ───────────────────────────────────────────────
 
+export interface BatchProgressEvent {
+  batchIndex: number
+  status: 'running' | 'done' | 'error'
+  decisionsInBatch: number
+  groupsFound: number
+  edgesCreated: number
+  pendingRemaining: number
+}
+
 export interface ConnectDecisionsOptions {
   dbSession: Session
   ai: AIProvider
@@ -40,6 +49,14 @@ export interface ConnectDecisionsOptions {
   /** LLM concurrency (default 2) */
   concurrency?: number
   verbose?: boolean
+  /** Called after each batch completes (for SSE progress) */
+  onBatchProgress?: (event: BatchProgressEvent) => void
+  /** Called after each group within a batch is analyzed (for real-time SSE updates) */
+  onGroupDone?: (info: { batchIndex: number; groupIndex: number; totalGroups: number; edgesFound: number; reason: string }) => void
+  /** External abort signal */
+  abortSignal?: { aborted: boolean }
+  /** Comparison mode: 'summary' uses only summaries for grouping, 'content' uses full text (default 'content') */
+  mode?: 'summary' | 'content'
 }
 
 export interface ConnectDecisionsResult {
@@ -61,6 +78,55 @@ interface DecisionRecord {
 }
 
 const RELATIONSHIP_TYPES = ['CAUSED_BY', 'DEPENDS_ON', 'CONFLICTS_WITH', 'CO_DECIDED'] as const
+
+// ── Batch Plan ──────────────────────────────────────────
+
+export interface BatchPlan {
+  optimalK: number
+  oldPerBatch: number
+  totalBatches: number
+  newDecisions: number
+  oldDecisions: number
+  batchSize: number
+}
+
+/**
+ * Compute optimal batch composition for decision grouping.
+ *
+ * @param M - number of already-compared (old) decisions
+ * @param K - number of new (uncompared) decisions
+ * @param B - batch capacity (decisions per batch)
+ */
+export function computeBatchPlan(M: number, K: number, B: number): BatchPlan {
+  if (K === 0 || B < 2) {
+    return { optimalK: 0, oldPerBatch: B, totalBatches: 0, newDecisions: K, oldDecisions: M, batchSize: B }
+  }
+
+  // Special case: no old decisions — just batch all new decisions together
+  if (M === 0) {
+    const batches = Math.ceil(K / B)
+    return { optimalK: Math.min(K, B), oldPerBatch: 0, totalBatches: batches, newDecisions: K, oldDecisions: 0, batchSize: B }
+  }
+
+  let bestK = 1
+  let bestT = Infinity
+
+  for (let k = 1; k <= Math.min(K, B - 1); k++) {
+    const rounds = Math.ceil(M / (B - k))
+    const groups = Math.ceil(K / k)
+    const T = rounds * groups
+    if (T < bestT) { bestT = T; bestK = k }
+  }
+
+  return {
+    optimalK: bestK,
+    oldPerBatch: B - bestK,
+    totalBatches: bestT,
+    newDecisions: K,
+    oldDecisions: M,
+    batchSize: B,
+  }
+}
 
 // ── createPendingEdges ──────────────────────────────────
 
@@ -178,6 +244,10 @@ export async function connectDecisions(
     batchCapacity = 50,
     concurrency = 2,
     verbose = true,
+    onBatchProgress,
+    onGroupDone,
+    abortSignal,
+    mode = 'content',
   } = opts
 
   if (verbose) console.log('\n🔗 Connecting decisions...')
@@ -188,6 +258,12 @@ export async function connectDecisions(
 
   // Iterate through PENDING edges
   while (true) {
+    // Check abort signal
+    if (abortSignal?.aborted) {
+      if (verbose) console.log(`  ⏹️ Abort requested, stopping`)
+      break
+    }
+
     // Check budget
     if (budget?.exceeded) {
       if (verbose) console.log(`  ⚠️ Budget exhausted, stopping`)
@@ -195,10 +271,12 @@ export async function connectDecisions(
     }
 
     // 1. Find decision IDs with PENDING edges
+    if (verbose) console.log(`\n  🔍 Looking for decisions with PENDING edges (limit ${batchCapacity})...`)
     const pendingDecisionIds = await getPendingDecisionIds(session, batchCapacity)
+    if (verbose) console.log(`  🔍 Found ${pendingDecisionIds.length} decision(s)`)
 
     if (pendingDecisionIds.length < 2) {
-      if (verbose && batchesRun === 0) console.log(`  ○ No PENDING edges to process`)
+      if (verbose) console.log(`  ○ No PENDING edges to process (need ≥ 2, got ${pendingDecisionIds.length})`)
       break
     }
 
@@ -244,6 +322,15 @@ export async function connectDecisions(
       if (verbose) console.log(`    ⚠️ Grouping failed: ${err.message}`)
     }
 
+    // Check abort after grouping LLM call
+    if (abortSignal?.aborted) {
+      // Still delete PENDING edges for this batch to avoid re-processing
+      await deletePendingEdgesAmong(session, pendingDecisionIds)
+      batchesRun++
+      if (verbose) console.log(`  ⏹️ Abort after grouping, skipping deep analysis`)
+      break
+    }
+
     // 5. Per-group LLM deep analysis
     let batchEdges = 0
 
@@ -252,9 +339,9 @@ export async function connectDecisions(
         groups,
         concurrency,
         async (group) => {
-          if (budget?.exceeded) return []
+          if (budget?.exceeded || abortSignal?.aborted) return []
 
-          // Build full content
+          // Build decision content (summary mode uses summary as content for speed)
           const groupDecisions: DecisionFullContent[] = []
           for (const id of group.group) {
             const d = decisions.find(dd => dd.id === id)
@@ -264,7 +351,7 @@ export async function connectDecisions(
                 function: d.functionName,
                 file: d.filePath,
                 summary: d.summary,
-                content: d.content,
+                content: mode === 'summary' ? d.summary : d.content,
                 keywords: d.keywords,
               })
             }
@@ -273,10 +360,22 @@ export async function connectDecisions(
 
           try {
             const relPrompt = buildRelationshipPrompt(groupDecisions, group.reason)
+            if (verbose) console.log(`      → Analyzing group [${groupDecisions.length}]: ${group.reason.slice(0, 80)}`)
             const rawRel = await ai.call(relPrompt)
             if (budget) budget.record(ai.lastUsage)
             const result = parseJsonSafe<{ edges: any[] }>(rawRel, { edges: [] })
-            return Array.isArray(result.edges) ? result.edges : []
+            const edges = Array.isArray(result.edges) ? result.edges : []
+            if (verbose) console.log(`        ${edges.length} edge(s) found`)
+            if (onGroupDone) {
+              onGroupDone({
+                batchIndex: batchesRun,
+                groupIndex: groups.indexOf(group),
+                totalGroups: groups.length,
+                edgesFound: edges.length,
+                reason: group.reason.slice(0, 120),
+              })
+            }
+            return edges
           } catch (err: any) {
             if (verbose) console.log(`    ⚠️ Group analysis failed: ${err.message}`)
             return []
@@ -288,7 +387,10 @@ export async function connectDecisions(
       for (const edges of groupResults) {
         for (const edge of edges) {
           const edgeType = String(edge.type).toUpperCase()
-          if (!RELATIONSHIP_TYPES.includes(edgeType as any)) continue
+          if (!RELATIONSHIP_TYPES.includes(edgeType as any)) {
+            if (verbose) console.log(`      ⚠️ Skipping unknown edge type: ${edgeType}`)
+            continue
+          }
           if (!edge.from || !edge.to) continue
 
           try {
@@ -305,7 +407,9 @@ export async function connectDecisions(
               }
             )
             batchEdges++
-          } catch {}
+          } catch (err: any) {
+            if (verbose) console.log(`      ⚠️ Edge write failed (${edge.from} → ${edge.to}): ${err.message}`)
+          }
         }
       }
     }
@@ -320,6 +424,19 @@ export async function connectDecisions(
 
     if (verbose) {
       console.log(`    📝 ${batchEdges}  relationship edges, ${pendingDeleted}  PENDING edges processed`)
+    }
+
+    // Fire progress callback
+    if (onBatchProgress) {
+      const remaining = await countPendingEdges(session)
+      onBatchProgress({
+        batchIndex: batchesRun - 1,
+        status: 'done',
+        decisionsInBatch: pendingDecisionIds.length,
+        groupsFound: groups.length,
+        edgesCreated: batchEdges,
+        pendingRemaining: remaining,
+      })
     }
   }
 
@@ -342,16 +459,20 @@ export async function connectDecisions(
  */
 async function getPendingDecisionIds(session: Session, limit: number): Promise<string[]> {
   try {
+    const safeLimit = Math.max(1, Math.floor(limit))
+    // Simple query — Memgraph has issues with WITH+count+ORDER BY+LIMIT combo
     const result = await session.run(
-      `MATCH (d:DecisionContext)-[r:PENDING_COMPARISON]-()
-       WITH d, count(r) AS pendingCount
-       ORDER BY pendingCount DESC
-       LIMIT $limit
-       RETURN d.id AS id`,
-      { limit }
+      `MATCH (d:DecisionContext)-[:PENDING_COMPARISON]-()
+       RETURN DISTINCT d.id AS id
+       LIMIT ${safeLimit}`
     )
-    return result.records.map(r => r.get('id') as string)
-  } catch {
+    const ids = result.records.map(r => r.get('id') as string)
+    if (ids.length === 0) {
+      console.log('  [debug] getPendingDecisionIds: 0 results')
+    }
+    return ids
+  } catch (err: any) {
+    console.error('getPendingDecisionIds error:', err.message)
     return []
   }
 }
@@ -363,7 +484,8 @@ async function countPendingEdges(session: Session): Promise<number> {
       `MATCH ()-[r:PENDING_COMPARISON]->() RETURN count(r) AS cnt`
     )
     return toNum(result.records[0]?.get('cnt'))
-  } catch {
+  } catch (err: any) {
+    console.error('countPendingEdges error:', err.message)
     return 0
   }
 }
@@ -394,7 +516,8 @@ async function getDecisionRecords(session: Session, ids: string[]): Promise<Deci
       content: (r.get('content') as string) ?? '',
       keywords: (r.get('keywords') as string[]) ?? [],
     }))
-  } catch {
+  } catch (err: any) {
+    console.error('getDecisionRecords error:', err.message)
     return []
   }
 }
@@ -413,7 +536,8 @@ async function getCPGHints(session: Session, decisions: DecisionRecord[]): Promi
       { names: fnNames }
     )
     return result.records.map(r => r.get('hint') as string)
-  } catch {
+  } catch (err: any) {
+    console.error('getCPGHints error:', err.message)
     return []
   }
 }
@@ -431,7 +555,8 @@ async function deletePendingEdgesAmong(session: Session, ids: string[]): Promise
       { ids }
     )
     return toNum(result.records[0]?.get('cnt'))
-  } catch {
+  } catch (err: any) {
+    console.error('deletePendingEdgesAmong error:', err.message)
     return 0
   }
 }

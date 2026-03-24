@@ -44,6 +44,11 @@ import {
   getFilesFromGraph, getBusinessContext, buildCallerCalleeCodes,
   batchWriteDecisions,
 } from '../ingestion/shared'
+import { analyzeFunction } from '../core/analyze-function'
+import {
+  createPendingEdges, connectDecisions, getPendingStatus,
+  BatchProgressEvent,
+} from '../ingestion/connect-decisions'
 
 const app = new Hono()
 app.use('*', cors())
@@ -972,7 +977,7 @@ app.get('/api/system/status', async (c) => {
   return c.json(status)
 })
 
-// Setup job runner (same pattern as cold-start)
+// Setup job runner (same pattern as scan pipeline)
 interface SetupJob {
   process: ChildProcess | null
   status: 'idle' | 'running' | 'done' | 'error'
@@ -1458,7 +1463,7 @@ app.post('/api/scan/start', async (c) => {
   scanJob.logs = []
   scanJob.startedAt = Date.now()
 
-  // Use cold-start-v2 with an auto-generated goal
+  // Use scan pipeline with an auto-generated goal
   const scanArgs = [
     '--transpile-only',
     path.resolve(__dirname, '../ingestion/cold-start-v2.ts'),
@@ -1536,7 +1541,571 @@ app.post('/api/scan/stop', (c) => {
   return c.json({ status: 'stopped' })
 })
 
-// ── Cold-start v2: Pipeline control ─────────────────────
+// ══════════════════════════════════════════════════════════
+// ── Run Analysis: in-process function-by-function analysis
+// ══════════════════════════════════════════════════════════
+
+interface RunFunctionStatus {
+  name: string
+  file: string
+  status: 'pending' | 'running' | 'done' | 'skipped' | 'error'
+  decisions: number
+}
+
+interface RunJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  repo: string | null
+  logs: LogBuffer
+  functions: RunFunctionStatus[]
+  analyzed: number
+  decisions: number
+  total: number
+  skipped: number
+  startedAt: number
+  abortRequested: boolean
+}
+
+const MAX_LOG_ENTRIES = 2000
+
+/**
+ * SSE-safe log buffer with monotonic sequence IDs.
+ * Readers track `lastSeq` instead of array index, so truncation never causes skips.
+ */
+class LogBuffer {
+  private entries: { seq: number; data: string }[] = []
+  private nextSeq = 0
+
+  push(data: string): void {
+    this.entries.push({ seq: this.nextSeq++, data })
+    if (this.entries.length > MAX_LOG_ENTRIES) {
+      this.entries.splice(0, this.entries.length - MAX_LOG_ENTRIES)
+    }
+  }
+
+  /** Read entries after the given sequence number. Returns [entries, newLastSeq]. */
+  readAfter(lastSeq: number): [string[], number] {
+    const result: string[] = []
+    let newLast = lastSeq
+    for (const e of this.entries) {
+      if (e.seq > lastSeq) {
+        result.push(e.data)
+        newLast = e.seq
+      }
+    }
+    return [result, newLast]
+  }
+
+  get length(): number { return this.entries.length }
+
+  clear(): void {
+    this.entries = []
+    // don't reset nextSeq — ensures old readers can't confuse new logs with old
+  }
+}
+
+/** Legacy helper — pushLog still works but now delegates to LogBuffer */
+function pushLog(buf: LogBuffer, entry: string): void {
+  buf.push(entry)
+}
+
+const runJob: RunJob = {
+  status: 'idle', repo: null, logs: new LogBuffer(), functions: [],
+  analyzed: 0, decisions: 0, total: 0, skipped: 0,
+  startedAt: 0, abortRequested: false,
+}
+
+// State persistence for resume
+const RUN_STATE_DIR = path.resolve(__dirname, '../../data')
+const RUN_STATE_FILE = path.join(RUN_STATE_DIR, 'analyze-state.json')
+
+interface ScanState {
+  repo: string
+  template: string
+  analyzed: string[]
+  lastUpdated: string
+}
+
+function loadRunState(repo: string): ScanState {
+  try {
+    if (fs.existsSync(RUN_STATE_FILE)) {
+      const state: ScanState = JSON.parse(fs.readFileSync(RUN_STATE_FILE, 'utf-8'))
+      if (state.repo === repo) return state
+    }
+  } catch {}
+  return { repo, template: '_default', analyzed: [], lastUpdated: new Date().toISOString() }
+}
+
+/** Serialized state writer — prevents concurrent workers from corrupting the file */
+let _stateSaveQueued = false
+let _stateSavePending: ScanState | null = null
+
+function saveRunState(state: ScanState): void {
+  _stateSavePending = state
+  if (_stateSaveQueued) return  // a write is already scheduled
+  _stateSaveQueued = true
+  // Use setImmediate to coalesce rapid concurrent calls into one write
+  setImmediate(() => {
+    _stateSaveQueued = false
+    const toWrite = _stateSavePending
+    if (!toWrite) return
+    _stateSavePending = null
+    try {
+      if (!fs.existsSync(RUN_STATE_DIR)) fs.mkdirSync(RUN_STATE_DIR, { recursive: true })
+      toWrite.lastUpdated = new Date().toISOString()
+      // Atomic write: write to temp file then rename
+      const tmpFile = RUN_STATE_FILE + '.tmp'
+      fs.writeFileSync(tmpFile, JSON.stringify(toWrite, null, 2))
+      fs.renameSync(tmpFile, RUN_STATE_FILE)
+    } catch (err: any) {
+      console.error('saveRunState error:', err.message)
+    }
+  })
+}
+
+/** Delete old decisions for a function (dedup before re-analysis) */
+async function deleteOldDecisionsForFunction(
+  session: any, functionName: string, filePath: string, repo: string
+): Promise<number> {
+  try {
+    const result = await session.run(
+      `MATCH (d:DecisionContext)-[:ANCHORED_TO]->(fn:CodeEntity {entity_type: 'function', name: $fnName})
+       MATCH (f:CodeEntity {entity_type: 'file', path: $filePath, repo: $repo})-[:CONTAINS]->(fn)
+       WHERE d.source IN ['analyze_function', 'cold_start_v2', 'cold_start']
+       DETACH DELETE d
+       RETURN count(d) AS cnt`,
+      { fnName: functionName, filePath, repo }
+    )
+    const cnt = result.records[0]?.get('cnt')
+    return typeof cnt === 'number' ? cnt : cnt?.toNumber?.() ?? 0
+  } catch { return 0 }
+}
+
+/** Core async analysis loop — runs in server process */
+async function runAnalysis(repo: string, concurrency: number): Promise<void> {
+  // Use a dedicated session only for initial queries; workers get their own sessions
+  const initSession = await getSession()
+  try {
+    const config = loadConfig()
+    const repoConfig = config.repos.find((r: any) => r.name === repo)
+    if (!repoConfig) throw new Error(`Repo "${repo}" not found in config`)
+
+    // Load all functions from graph
+    const files = await getFilesFromGraph(initSession, repo)
+    const allFunctions: { name: string; filePath: string; lineStart: number; lineEnd: number }[] = []
+    for (const file of files) {
+      for (const fn of file.functions) {
+        allFunctions.push({ name: fn.name, filePath: file.filePath, lineStart: fn.lineStart, lineEnd: fn.lineEnd })
+      }
+    }
+
+    // Load resume state
+    const state = loadRunState(repo)
+    const analyzedSet = new Set(state.analyzed)
+
+    // Build function list with status
+    runJob.functions = allFunctions.map(fn => ({
+      name: fn.name,
+      file: fn.filePath,
+      status: analyzedSet.has(`${fn.filePath}::${fn.name}`) ? 'skipped' as const : 'pending' as const,
+      decisions: 0,
+    }))
+    runJob.total = allFunctions.length
+    runJob.skipped = analyzedSet.size
+    runJob.analyzed = 0
+    runJob.decisions = 0
+
+    const remaining = allFunctions.filter(fn => !analyzedSet.has(`${fn.filePath}::${fn.name}`))
+
+    pushLog(runJob.logs, `Starting analysis: ${remaining.length} functions (${analyzedSet.size} skipped)`)
+    pushLog(runJob.logs, JSON.stringify({ type: 'progress', analyzed: 0, decisions: 0, total: runJob.total, skipped: runJob.skipped }))
+
+    if (remaining.length === 0) {
+      pushLog(runJob.logs, 'All functions already analyzed. Use force mode to re-analyze.')
+      runJob.status = 'done'
+      return
+    }
+
+    // Close init session before starting workers (they each get their own)
+    await initSession.close()
+
+    // Process functions with concurrency — each worker gets its own Neo4j session
+    await runWithConcurrency(remaining, concurrency, async (fn) => {
+      if (runJob.abortRequested) return
+
+      const fnIdx = runJob.functions.findIndex(f => f.name === fn.name && f.file === fn.filePath)
+      if (fnIdx >= 0) runJob.functions[fnIdx].status = 'running'
+      pushLog(runJob.logs, JSON.stringify({ type: 'function-start', name: fn.name, file: fn.filePath, index: fnIdx }))
+
+      // Per-worker session for safe concurrent DB access
+      const workerSession = await getSession()
+      try {
+        await deleteOldDecisionsForFunction(workerSession, fn.name, fn.filePath, repo)
+
+        const result = await analyzeFunction(
+          {
+            functionName: fn.name,
+            filePath: fn.filePath,
+            repo,
+            repoPath: repoConfig.path,
+            lineStart: fn.lineStart,
+            lineEnd: fn.lineEnd,
+            owner: 'dashboard',
+            session: workerSession,
+          },
+          {},
+          '_default',
+        )
+
+        const decCount = result.decisions.length
+        runJob.analyzed++
+        runJob.decisions += decCount
+
+        if (decCount > 0) {
+          await batchWriteDecisions(workerSession, result.decisions)
+          const newIds = result.decisions.map(d => d.id)
+          await createPendingEdges(workerSession, newIds, { verbose: false })
+        }
+
+        if (fnIdx >= 0) {
+          runJob.functions[fnIdx].status = 'done'
+          runJob.functions[fnIdx].decisions = decCount
+        }
+
+        const durSec = (result.metadata.duration_ms / 1000).toFixed(1)
+        pushLog(runJob.logs, JSON.stringify({
+          type: 'function-done', name: fn.name, file: fn.filePath,
+          decisions: decCount, duration: durSec, index: fnIdx,
+        }))
+      } catch (err: any) {
+        if (fnIdx >= 0) runJob.functions[fnIdx].status = 'error'
+        pushLog(runJob.logs, JSON.stringify({
+          type: 'function-error', name: fn.name, file: fn.filePath,
+          error: err.message, stack: err.stack?.split('\n')[1]?.trim(), index: fnIdx,
+        }))
+      } finally {
+        await workerSession.close()
+      }
+
+      // Save state every function for crash resilience
+      state.analyzed.push(`${fn.filePath}::${fn.name}`)
+      saveRunState(state)
+
+      pushLog(runJob.logs, JSON.stringify({
+        type: 'progress', analyzed: runJob.analyzed, decisions: runJob.decisions,
+        total: runJob.total, skipped: runJob.skipped,
+      }))
+    })
+
+    if (runJob.abortRequested) {
+      runJob.status = 'idle'
+      pushLog(runJob.logs, JSON.stringify({ type: 'stopped', analyzed: runJob.analyzed, decisions: runJob.decisions }))
+    } else {
+      runJob.status = 'done'
+      pushLog(runJob.logs, JSON.stringify({ type: 'done', analyzed: runJob.analyzed, decisions: runJob.decisions }))
+    }
+  } catch (err: any) {
+    runJob.status = 'error'
+    pushLog(runJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    // initSession may still be open if error happened before close
+    try { await initSession.close() } catch {}
+  }
+}
+
+app.get('/api/run/status', (c) => {
+  return c.json({
+    status: runJob.status,
+    repo: runJob.repo,
+    analyzed: runJob.analyzed,
+    decisions: runJob.decisions,
+    total: runJob.total,
+    skipped: runJob.skipped,
+    functions: runJob.functions,
+    startedAt: runJob.startedAt,
+  })
+})
+
+app.post('/api/run/start', async (c) => {
+  if (runJob.status === 'running') {
+    return c.json({ error: 'Analysis already running' }, 409)
+  }
+
+  const body = await c.req.json()
+  const { repo, summaryWords, contentWords, concurrency = 2 } = body
+
+  if (!repo) return c.json({ error: 'repo is required' }, 400)
+
+  // Validate repo exists
+  const config = loadConfig()
+  if (!config.repos.find((r: any) => r.name === repo)) {
+    return c.json({ error: `Repo "${repo}" not found in config` }, 400)
+  }
+
+  // Save analysis config if changed
+  if (summaryWords || contentWords) {
+    try {
+      const configPath = path.resolve(__dirname, '../../ckg.config.json')
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      raw.analysis = {
+        ...raw.analysis,
+        ...(summaryWords ? { summaryWords: parseInt(summaryWords) } : {}),
+        ...(contentWords ? { contentWords: parseInt(contentWords) } : {}),
+      }
+      fs.writeFileSync(configPath, JSON.stringify(raw, null, 2))
+      clearConfigCache()
+    } catch {}
+  }
+
+  // Reset job state
+  runJob.status = 'running'
+  runJob.repo = repo
+  runJob.logs.clear()
+  runJob.functions = []
+  runJob.analyzed = 0
+  runJob.decisions = 0
+  runJob.total = 0
+  runJob.skipped = 0
+  runJob.startedAt = Date.now()
+  runJob.abortRequested = false
+
+  // Kick off analysis (don't await)
+  runAnalysis(repo, concurrency).catch(err => {
+    runJob.status = 'error'
+    pushLog(runJob.logs,JSON.stringify({ type: 'error', error: err.message }))
+  })
+
+  return c.json({ status: 'started', repo })
+})
+
+app.post('/api/run/stop', (c) => {
+  if (runJob.status === 'running') {
+    runJob.abortRequested = true
+    pushLog(runJob.logs,JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'stopping' })
+})
+
+app.get('/api/run/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    let done = false
+
+    while (!done) {
+      const [entries, newSeq] = runJob.logs.readAfter(lastSeq)
+      for (const line of entries) {
+        try {
+          const parsed = JSON.parse(line)
+          await stream.writeSSE({ data: line, event: parsed.type || 'log' })
+        } catch {
+          await stream.writeSSE({ data: line, event: 'log' })
+        }
+      }
+      lastSeq = newSeq
+
+      if (runJob.status !== 'running' && runJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: runJob.status, event: 'status' })
+        done = true
+        break
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+  })
+})
+
+// ══════════════════════════════════════════════════════════
+// ── Group Decisions: batch grouping + relationship discovery
+// ══════════════════════════════════════════════════════════
+
+interface GroupBatchStatus {
+  index: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  newCount: number
+  oldCount: number
+  edgesFound: number
+  groups: number
+}
+
+interface GroupJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  logs: LogBuffer
+  batches: GroupBatchStatus[]
+  batchesDone: number
+  edgesFound: number
+  startedAt: number
+  abortRequested: boolean
+}
+
+const groupJob: GroupJob = {
+  status: 'idle', logs: new LogBuffer(), batches: [],
+  batchesDone: 0, edgesFound: 0,
+  startedAt: 0, abortRequested: false,
+}
+
+app.get('/api/group/stats', async (c) => {
+  const session = await getSession()
+  try {
+    // PENDING edge stats
+    const pendingStatus = await getPendingStatus(session)
+
+    // Total decisions
+    const totalResult = await session.run(
+      `MATCH (d:DecisionContext) RETURN count(d) AS cnt`
+    )
+    const total = num(totalResult.records[0]?.get('cnt'))
+
+    // Connected relationship edges
+    const connectedResult = await session.run(
+      `MATCH ()-[r:CAUSED_BY|DEPENDS_ON|CONFLICTS_WITH|CO_DECIDED]->()
+       RETURN count(r) AS cnt`
+    )
+    const connected = num(connectedResult.records[0]?.get('cnt'))
+
+    return c.json({
+      pending: pendingStatus.totalPendingEdges,
+      total,
+      connected,
+      newDecisions: pendingStatus.decisionsWithPending,
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+app.post('/api/group/start', async (c) => {
+  if (groupJob.status === 'running') {
+    return c.json({ error: 'Grouping already running' }, 409)
+  }
+
+  const body = await c.req.json()
+  const { mode = 'summary', batchSize = 50 } = body
+
+  // Reset job
+  groupJob.status = 'running'
+  groupJob.logs.clear()
+  groupJob.batches = []
+  groupJob.batchesDone = 0
+  groupJob.edgesFound = 0
+  groupJob.startedAt = Date.now()
+  groupJob.abortRequested = false
+
+  // Run grouping in background
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const config = loadConfig()
+      const ai = createAIProvider(config.ai)
+
+      pushLog(groupJob.logs,JSON.stringify({ type: 'started', mode, batchSize }))
+
+      const abortSignal = { get aborted() { return groupJob.abortRequested } }
+
+      await connectDecisions({
+        dbSession: session,
+        ai,
+        batchCapacity: batchSize,
+        concurrency: 2,
+        verbose: true,
+        mode,
+        abortSignal,
+        onGroupDone: (info) => {
+          pushLog(groupJob.logs, JSON.stringify({
+            type: 'group-done',
+            batch: info.batchIndex,
+            group: info.groupIndex,
+            totalGroups: info.totalGroups,
+            edges: info.edgesFound,
+            reason: info.reason,
+          }))
+        },
+        onBatchProgress: (event: BatchProgressEvent) => {
+          const batch: GroupBatchStatus = {
+            index: event.batchIndex,
+            status: event.status === 'done' ? 'done' : event.status === 'error' ? 'error' : 'running',
+            newCount: 0,
+            oldCount: event.decisionsInBatch,
+            edgesFound: event.edgesCreated,
+            groups: event.groupsFound,
+          }
+          groupJob.batches.push(batch)
+          groupJob.batchesDone++
+          groupJob.edgesFound += event.edgesCreated
+
+          pushLog(groupJob.logs,JSON.stringify({
+            type: 'batch-done',
+            batch: event.batchIndex,
+            decisions: event.decisionsInBatch,
+            groups: event.groupsFound,
+            edges: event.edgesCreated,
+            pendingRemaining: event.pendingRemaining,
+          }))
+
+          // Progress event
+          pushLog(groupJob.logs,JSON.stringify({
+            type: 'progress',
+            batchesDone: groupJob.batchesDone,
+            edgesFound: groupJob.edgesFound,
+            pendingRemaining: event.pendingRemaining,
+          }))
+        },
+      })
+
+      if (groupJob.abortRequested) {
+        groupJob.status = 'idle'
+        pushLog(groupJob.logs,JSON.stringify({ type: 'stopped', batchesDone: groupJob.batchesDone, edgesFound: groupJob.edgesFound }))
+      } else {
+        groupJob.status = 'done'
+        pushLog(groupJob.logs,JSON.stringify({ type: 'done', batchesDone: groupJob.batchesDone, edgesFound: groupJob.edgesFound }))
+      }
+    } catch (err: any) {
+      groupJob.status = 'error'
+      pushLog(groupJob.logs,JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started', mode, batchSize })
+})
+
+app.post('/api/group/stop', (c) => {
+  if (groupJob.status === 'running') {
+    groupJob.abortRequested = true
+    pushLog(groupJob.logs,JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'stopping' })
+})
+
+app.get('/api/group/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    let done = false
+
+    while (!done) {
+      const [entries, newSeq] = groupJob.logs.readAfter(lastSeq)
+      for (const line of entries) {
+        try {
+          const parsed = JSON.parse(line)
+          await stream.writeSSE({ data: line, event: parsed.type || 'log' })
+        } catch {
+          await stream.writeSSE({ data: line, event: 'log' })
+        }
+      }
+      lastSeq = newSeq
+
+      if (groupJob.status !== 'running' && groupJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: groupJob.status, event: 'status' })
+        done = true
+        break
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+  })
+})
+
+// ── Scan Pipeline: goal-based analysis ───────────────────
 
 interface PipelineJob {
   process: ChildProcess | null
@@ -1556,7 +2125,7 @@ const job: PipelineJob = {
   startedAt: 0,
 }
 
-app.get('/api/cold-start/config', (c) => {
+app.get('/api/scan/config', (c) => {
   try {
     const config = loadConfig()
     const analysis = getAnalysisConfig()
@@ -1569,7 +2138,7 @@ app.get('/api/cold-start/config', (c) => {
   }
 })
 
-app.get('/api/cold-start/status', (c) => {
+app.get('/api/scan/pipeline/status', (c) => {
   return c.json({
     status: job.status,
     goal: job.goal,
@@ -1579,7 +2148,7 @@ app.get('/api/cold-start/status', (c) => {
   })
 })
 
-app.post('/api/cold-start/start', async (c) => {
+app.post('/api/scan/pipeline/start', async (c) => {
   if (job.status === 'running') {
     return c.json({ error: 'Pipeline already running' }, 409)
   }
@@ -1649,7 +2218,7 @@ app.post('/api/cold-start/start', async (c) => {
   return c.json({ status: 'started', goal, repo })
 })
 
-app.get('/api/cold-start/stream', (c) => {
+app.get('/api/scan/pipeline/stream', (c) => {
   return streamSSE(c, async (stream) => {
     let lastIdx = 0
     let done = false
@@ -1674,7 +2243,7 @@ app.get('/api/cold-start/stream', (c) => {
   })
 })
 
-app.post('/api/cold-start/stop', (c) => {
+app.post('/api/scan/pipeline/stop', (c) => {
   if (job.process) {
     job.process.kill('SIGTERM')
     job.status = 'idle'
@@ -1684,13 +2253,13 @@ app.post('/api/cold-start/stop', (c) => {
   return c.json({ status: 'stopped' })
 })
 
-app.get('/api/cold-start/logs', (c) => {
+app.get('/api/scan/pipeline/logs', (c) => {
   return c.json({ logs: job.logs, status: job.status })
 })
 
 // ── Schedule: nightly pipeline runs ───────────────────────
 
-type PipelinePhase = 'schema' | 'ingest' | 'link' | 'cold-start' | 'sessions' | 'refine' | 'embed'
+type PipelinePhase = 'schema' | 'ingest' | 'link' | 'scan' | 'sessions' | 'refine' | 'embed'
 
 interface PipelineConfig {
   goals: string[]
@@ -1910,7 +2479,7 @@ type PipelineStep = { label: string; phase: PipelinePhase; cmd: string; args: st
 function startPipelineInternal(cfg: PipelineConfig): { error?: string; phases?: PipelinePhase[]; stepCount?: number } {
   const { goals, concurrency, owner, repo, force, deepCheck, dryRun, skipPhases, reset } = cfg
 
-  const allPhases: PipelinePhase[] = ['schema', 'ingest', 'link', 'cold-start', 'sessions', 'refine', 'embed']
+  const allPhases: PipelinePhase[] = ['schema', 'ingest', 'link', 'scan', 'sessions', 'refine', 'embed']
   const phases = allPhases.filter(p => !skipPhases.includes(p))
 
   if (phases.length === 0) return { error: 'No phases to run — all skipped' }
@@ -1959,7 +2528,7 @@ function startPipelineInternal(cfg: PipelineConfig): { error?: string; phases?: 
     steps.push({ label: 'Link tables', phase: 'link', cmd: tsNode, args: ['--transpile-only', 'src/ingestion/link-tables.ts'] })
   }
 
-  if (phases.includes('cold-start') && goals.length > 0) {
+  if (phases.includes('scan') && goals.length > 0) {
     for (const goal of goals) {
       const csArgs = [
         '--transpile-only', path.resolve(__dirname, '../ingestion/cold-start-v2.ts'),
@@ -1969,7 +2538,7 @@ function startPipelineInternal(cfg: PipelineConfig): { error?: string; phases?: 
       if (force) csArgs.push('--force')
       if (deepCheck) csArgs.push('--deep-check')
       if (dryRun) csArgs.push('--dry-run')
-      steps.push({ label: `Cold-start: ${goal}`, phase: 'cold-start', cmd: tsNode, args: csArgs })
+      steps.push({ label: `Scan: ${goal}`, phase: 'scan', cmd: tsNode, args: csArgs })
     }
   }
 
@@ -2966,11 +3535,8 @@ app.get('/pipeline', (c) => {
   return c.html(html)
 })
 
-app.get('/cold-start', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'cold-start.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
+// cold-start.html removed — redirect to /scan
+app.get('/cold-start', (c) => c.redirect('/scan'))
 
 app.get('/decisions', (c) => {
   const htmlPath = path.resolve(__dirname, 'public', 'decisions.html')

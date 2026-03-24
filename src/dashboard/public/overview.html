@@ -198,7 +198,7 @@ function render(d) {
     return '<div class="repo-card"><div class="repo-name"><div class="repo-dot" style="background:'+col+'"></div>'+esc(r.name)+'</div><div class="repo-stats">'+entityBadges+'<span class="repo-stat">│</span><span class="repo-stat"><strong>'+fmtN(r.decisions)+'</strong> decisions</span><span class="repo-stat"><strong>'+fmtN(r.calls)+'</strong> CALLS</span></div><div class="cov-bar-wrap"><span class="cov-label">Coverage</span><div class="cov-track"><div class="cov-fill" style="width:'+covPct+'%;background:'+covColor+'"></div></div><span class="cov-pct" style="color:'+covColor+'">'+covPct+'%</span></div><div class="entity-mini">'+miniSegs+'</div></div>'
   }).join('')
 
-  var srcLabel=function(s){return {cold_start:'Cold Start',cold_start_v2:'Cold Start v2',claude_code_session:'Session',manual_business_context:'Business'}[s]||s}
+  var srcLabel=function(s){return {cold_start:'Quick Scan',cold_start_v2:'Quick Scan',claude_code_session:'Session',manual_business_context:'Business',analyze_function:'Run Analysis'}[s]||s}
   var srcData=d.decisionSources.map(function(s,i){return {label:srcLabel(s.source),value:s.count,color:COLORS[i%COLORS.length]}})
   var srcDonut=donutSVG(srcData,140,20)
   var srcLegend=srcData.map(function(s){return '<div class="legend-item"><div class="legend-dot" style="background:'+s.color+'"></div><span class="legend-label">'+esc(s.label)+'</span><span class="legend-val">'+s.value+'</span></div>'}).join('')
@@ -251,7 +251,23 @@ function render(d) {
     + '<div class="health-card '+(h.gapFunctions > 10 ? 'warn' : 'ok')+'"><div class="health-icon"></div><div class="health-info"><div class="health-value" style="color:'+(h.gapFunctions > 10 ? 'var(--yellow)' : 'var(--text-dim)')+'">'+(h.gapFunctions||0)+'</div><div class="health-label">Gap Functions (no decisions)</div></div></div>'
     + '<div class="health-card '+(lastRunStatus === 'done' ? 'ok' : lastRunStatus === 'error' ? 'bad' : 'warn')+'"><div class="health-icon">'+(lastRunStatus === 'done' ? '' : lastRunStatus === 'error' ? '' : '')+'</div><div class="health-info"><div class="health-value" style="font-size:14px;color:var(--text-secondary)">'+lastRunStr+'</div><div class="health-label">Last Pipeline Run</div></div></div>'
 
-  el.innerHTML = '<div class="stat-row">'+statCards+'</div>'
+  // Welcome banner for first-time users (empty database)
+  var welcomeBanner = ''
+  if (t.decisions === 0 && t.codeEntities === 0 && !localStorage.getItem('ckg-welcome-dismissed')) {
+    welcomeBanner = '<div class="card" id="welcomeBanner" style="margin-bottom:24px;position:relative;border:1px solid rgba(77,142,255,0.2);background:linear-gradient(135deg,var(--surface-1),rgba(77,142,255,0.04))">'
+      + '<button onclick="document.getElementById(\'welcomeBanner\').remove();localStorage.setItem(\'ckg-welcome-dismissed\',\'1\')" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:18px;line-height:1" title="Dismiss">&times;</button>'
+      + '<div class="card-body" style="padding:28px 24px">'
+      + '<h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Welcome to Context Chain</h3>'
+      + '<p style="color:var(--text-secondary);font-size:14px;margin-bottom:20px;line-height:1.6">No design decisions yet. Choose how to get started:</p>'
+      + '<div style="display:flex;gap:12px;flex-wrap:wrap">'
+      + '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;background:var(--accent);color:white;text-decoration:none;font-weight:600;font-size:13px;transition:opacity 0.15s">Getting Started &mdash; set up step by step &rarr;</a>'
+      + '<a href="/scan" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);text-decoration:none;font-weight:600;font-size:13px;transition:all 0.15s">Quick Scan &mdash; try it right now &rarr;</a>'
+      + '</div>'
+      + '<p style="color:var(--text-dim);font-size:12px;margin-top:16px">Already set up? Go to <a href="/run" style="color:var(--accent);text-decoration:none">Run Analysis</a> to start extracting decisions from your codebase.</p>'
+      + '</div></div>'
+  }
+
+  el.innerHTML = welcomeBanner + '<div class="stat-row">'+statCards+'</div>'
     + '<div class="health-row">'+healthCards+'</div>'
     +'<div class="grid-3">'
     +'<div class="card"><div class="card-head"><h3>Memgraph Live</h3><span class="card-badge"><span class="live-dot"></span>polling 5s</span></div><div class="card-body" id="mgLivePanel">'+gaugesHtml+'</div></div>'
