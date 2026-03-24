@@ -16,6 +16,8 @@ Codebase → Joern CPG → LLM extracts decisions per function
         → Claude Code queries context while you code
 ```
 
+> **System requirements:** Context Chain relies on **Memgraph** (graph database, ~1.5 GB) and **Joern** (code analysis, ~2 GB) — expect **~3.5 GB+ disk space** and Docker installed. This is a relatively heavy local tool, not a lightweight plugin.
+
 **Website:** [usecontextchain.com](https://usecontextchain.com)
 
 ---
