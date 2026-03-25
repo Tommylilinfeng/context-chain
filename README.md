@@ -8,7 +8,7 @@ Existing context engineering tools (OpenSpec, Git-AI, Dexicon) capture knowledge
 - **Automatic staleness detection** — code changes flag affected decisions; knowledge doesn't silently rot
 - **Decision-level extraction** — not prompt summaries or raw transcripts, but _what was chosen, what was rejected, and why_
 - **Decision relationships** — `CAUSED_BY`, `DEPENDS_ON`, `CONFLICTS_WITH` edges across a graph, not flat files
-- **Runs overnight on your subscription** — uses `claude -p` (Claude CLI), no API costs, doesn't eat your daytime quota
+- **Runs overnight on your subscription** — uses `claude -p` or `codex exec` (Claude CLI / Codex CLI), no API costs, doesn't eat your daytime quota
 
 ```
 Codebase → Joern CPG → LLM extracts decisions per function
@@ -58,7 +58,7 @@ From the Dashboard:
 1. **System** → Add your repo (name, path, language)
 2. **System** → Generate CPG (Joern code analysis)
 3. **System** → Full Setup (schema + import code structure)
-4. **Quick Scan** → Pick a repo, click Scan → decisions appear
+4. **Run** → Execute analysis → decisions appear, then **Group** to connect them
 
 Or from CLI:
 
@@ -180,7 +180,7 @@ Tasks: staleness detection (compare against git HEAD), anchor precision upgrade,
 }
 ```
 
-AI providers: `claude-cli` (subscription, no cost) or `anthropic-api` (direct API, set key in config or Dashboard).
+AI providers: `claude-cli` (Anthropic subscription), `codex-cli` (OpenAI subscription), or `anthropic-api` (direct API key). Set in config or Dashboard.
 
 ---
 
@@ -224,7 +224,7 @@ SUPERSEDES        — new decision replaces old decision
 |-----------|-----------|
 | Graph DB | Memgraph |
 | Code analysis | Joern (CPG) |
-| Decision extraction | Claude CLI / Anthropic API |
+| Decision extraction | Claude CLI / Codex CLI / Anthropic API |
 | Embedding | Voyage AI (optional) |
 | MCP Server | TypeScript + `@modelcontextprotocol/sdk` |
 | Dashboard | Hono + vanilla HTML/JS |
