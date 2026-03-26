@@ -210,6 +210,15 @@ async function ingest(): Promise<void> {
     ).catch(() => {}) // ignore if no Project node
     console.log('   ✓ Old edges cleared')
 
+    // 1. Filter out built-in/external function nodes (no valid line info)
+    const originalCount = data.nodes.length
+    data.nodes = data.nodes.filter(n => {
+      if (n.entity_type === 'function' && (n.line_start === -1 || n.line_end === -1)) return false
+      return true
+    })
+    const filtered = originalCount - data.nodes.length
+    if (filtered > 0) console.log(`\n🧹 Filtered ${filtered} built-in function nodes (no line info)`)
+
     // 1. 写入节点
     console.log('\n📁 写入 CodeEntity 节点...')
     const BATCH = 200
