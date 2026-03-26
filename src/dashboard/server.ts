@@ -46,8 +46,6 @@ import {
   batchWriteDecisions,
 } from '../ingestion/shared'
 import { analyzeFunction } from '../core/analyze-function'
-import { getHeadCommit, getChangedFiles } from '../ingestion/git-utils'
-import { loadState } from '../ingestion/state'
 import {
   createPendingEdges, connectDecisions, getPendingStatus,
   BatchProgressEvent,
@@ -3211,69 +3209,6 @@ async function findAvailablePort(start: number): Promise<number> {
   throw new Error(`No available port found in range ${start}–${start + MAX_PORT_ATTEMPTS - 1}`)
 }
 
-// ── Auto staleness detection ────────────────────────────
-
-const AUTO_REFINE_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
-let autoRefineTimer: ReturnType<typeof setInterval> | null = null
-
-async function autoDetectStaleness(): Promise<void> {
-  let session
-  try {
-    const config = loadConfig()
-    session = await getSession()
-    const state = loadState()
-    let totalMarked = 0
-
-    for (const repo of config.repos) {
-      let headCommit: string
-      try {
-        headCommit = getHeadCommit(repo.path)
-      } catch {
-        continue
-      }
-
-      const changedFiles = new Set<string>()
-      for (const [key, fileState] of Object.entries(state.files)) {
-        if (!key.startsWith(`${repo.name}:`)) continue
-        const filePath = key.slice(repo.name.length + 1)
-        try {
-          const changed = getChangedFiles(repo.path, fileState.lastCommit)
-          if (changed.includes('__ALL__') || changed.some(cf => filePath.includes(cf) || cf.includes(filePath))) {
-            changedFiles.add(filePath)
-          }
-        } catch {
-          changedFiles.add(filePath)
-        }
-      }
-
-      if (changedFiles.size === 0) continue
-
-      for (const filePath of changedFiles) {
-        try {
-          const result = await session.run(
-            `MATCH (d:DecisionContext {staleness: 'active'})-[:ANCHORED_TO|APPROXIMATE_TO]->(ce:CodeEntity {repo: $repo})
-             WHERE ce.path = $filePath OR ce.path ENDS WITH $fileName
-             SET d.staleness = 'stale'
-             RETURN count(d) AS cnt`,
-            { repo: repo.name, filePath, fileName: path.basename(filePath) }
-          )
-          const cnt = result.records[0]?.get('cnt')
-          const num = typeof cnt === 'number' ? cnt : cnt?.toNumber?.() ?? 0
-          totalMarked += num
-        } catch {}
-      }
-    }
-
-    if (totalMarked > 0) {
-      console.log(`[auto-refine] ${totalMarked} decisions marked stale`)
-    }
-  } catch (err: any) {
-    console.error(`[auto-refine] error: ${err.message}`)
-  } finally {
-    if (session) try { await session.close() } catch {}
-  }
-}
-
 async function main() {
   await verifyConnectivity()
 
@@ -3281,11 +3216,6 @@ async function main() {
   if (port !== PREFERRED_PORT) {
     console.log(`⚠️  Port ${PREFERRED_PORT} is in use, using ${port} instead`)
   }
-
-  // Run staleness check once at startup, then every 5 minutes
-  autoDetectStaleness()
-  autoRefineTimer = setInterval(autoDetectStaleness, AUTO_REFINE_INTERVAL_MS)
-  console.log(`🔄 Auto staleness detection: every ${AUTO_REFINE_INTERVAL_MS / 60000}min`)
 
   serve({ fetch: app.fetch, port }, () => {
     console.log(`\n🖥️  CKG Dashboard: http://localhost:${port}\n`)
