@@ -1529,9 +1529,10 @@ app.get('/api/system/cpg/status', (c) => {
 let lastStalenessCheck: {
   checkedAt: string
   voidedCount: number
-  totalActive: number
+  reactivatedCount: number
+  totalChecked: number
   percentage: string
-  details: { functionId: string; functionName: string; filePath: string; decisionsAffected: number }[]
+  details: { functionId: string; functionName: string; filePath: string; action: string }[]
 } | null = null
 
 app.post('/api/system/staleness-check', async (c) => {
@@ -1539,16 +1540,25 @@ app.post('/api/system/staleness-check', async (c) => {
   try {
     const config = loadConfig()
 
-    // 1. Get all active decisions with their anchored function info
+    // 0. Backfill: copy content_hash from CodeEntity to decisions that don't have anchored_content_hash yet
+    await session.run(
+      `MATCH (d:DecisionContext)-[:ANCHORED_TO]->(fn:CodeEntity {entity_type: 'function'})
+       WHERE d.anchored_content_hash IS NULL AND fn.content_hash IS NOT NULL AND fn.content_hash <> ''
+       SET d.anchored_content_hash = fn.content_hash`
+    )
+
+    // 1. Get ALL decisions (active + code_changed) with their anchored function + decision's own hash
     const result = await session.run(
-      `MATCH (d:DecisionContext {staleness: 'active'})-[:ANCHORED_TO]->(fn:CodeEntity {entity_type: 'function'})
-       RETURN fn.id AS fnId, fn.name AS fnName, fn.path AS fnPath,
-              fn.line_start AS ls, fn.line_end AS le, fn.content_hash AS oldHash,
-              fn.repo AS repo, collect(d.id) AS decisionIds`
+      `MATCH (d:DecisionContext)-[:ANCHORED_TO]->(fn:CodeEntity {entity_type: 'function'})
+       WHERE d.staleness IN ['active', 'code_changed']
+       RETURN d.id AS dId, d.staleness AS currentStaleness,
+              d.anchored_content_hash AS anchoredHash,
+              fn.id AS fnId, fn.name AS fnName, fn.path AS fnPath,
+              fn.line_start AS ls, fn.line_end AS le, fn.repo AS repo`
     )
 
     if (result.records.length === 0) {
-      lastStalenessCheck = { checkedAt: new Date().toISOString(), voidedCount: 0, totalActive: 0, percentage: '0', details: [] }
+      lastStalenessCheck = { checkedAt: new Date().toISOString(), voidedCount: 0, reactivatedCount: 0, totalChecked: 0, percentage: '0', details: [] }
       return c.json(lastStalenessCheck)
     }
 
@@ -1558,73 +1568,99 @@ app.post('/api/system/staleness-check', async (c) => {
       repoPathMap.set(repo.name, repo.path)
     }
 
-    const changedFnIds: string[] = []
-    const details: typeof lastStalenessCheck['details'] = []
-    let totalDecisions = 0
-
-    for (const r of result.records) {
-      const fnId = r.get('fnId') as string
-      const fnName = r.get('fnName') as string
-      const fnPath = r.get('fnPath') as string
-      const ls = r.get('ls')
-      const le = r.get('le')
-      const oldHash = (r.get('oldHash') as string) || ''
-      const repo = r.get('repo') as string
-      const decisionIds = r.get('decisionIds') as string[]
-
-      const lineStart = typeof ls === 'number' ? ls : ls?.toNumber?.() ?? -1
-      const lineEnd = typeof le === 'number' ? le : le?.toNumber?.() ?? -1
-
-      totalDecisions += decisionIds.length
-
+    // Cache: compute disk hash once per function
+    const diskHashCache = new Map<string, string | null>()
+    function getDiskHash(fnId: string, fnPath: string, repo: string, lineStart: number, lineEnd: number): string | null {
+      if (diskHashCache.has(fnId)) return diskHashCache.get(fnId)!
       const repoPath = repoPathMap.get(repo)
-      if (!repoPath || lineStart < 1 || lineEnd < 1) continue
-
-      // Resolve file on disk
+      if (!repoPath || lineStart < 1 || lineEnd < 1) { diskHashCache.set(fnId, null); return null }
       const candidates = [
         path.join(repoPath, fnPath),
         path.join(repoPath, 'src', fnPath),
         ...(fnPath.startsWith('src/') ? [path.join(repoPath, fnPath.slice(4))] : []),
       ]
       const diskPath = candidates.find(p => fs.existsSync(p))
-      if (!diskPath) continue
-
-      // Read function body and compute hash
+      if (!diskPath) { diskHashCache.set(fnId, null); return null }
       try {
         const lines = fs.readFileSync(diskPath, 'utf-8').split('\n')
         const start = Math.max(lineStart - 1, 0)
         const end = Math.min(lineEnd, lines.length)
         const body = lines.slice(start, end).join('\n')
-        const newHash = createHash('sha256').update(body, 'utf-8').digest('hex')
-
-        if (oldHash && newHash !== oldHash) {
-          changedFnIds.push(fnId)
-          details.push({ functionId: fnId, functionName: fnName, filePath: fnPath, decisionsAffected: decisionIds.length })
-        }
-      } catch {}
+        const hash = createHash('sha256').update(body, 'utf-8').digest('hex')
+        diskHashCache.set(fnId, hash)
+        return hash
+      } catch { diskHashCache.set(fnId, null); return null }
     }
 
-    // Mark changed decisions in DB
+    const toVoid: string[] = []     // active → code_changed
+    const toReactivate: string[] = [] // code_changed → active
+    const details: { functionId: string; functionName: string; filePath: string; action: string }[] = []
+
+    for (const r of result.records) {
+      const dId = r.get('dId') as string
+      const currentStaleness = r.get('currentStaleness') as string
+      const anchoredHash = (r.get('anchoredHash') as string) || ''
+      const fnId = r.get('fnId') as string
+      const fnName = r.get('fnName') as string
+      const fnPath = r.get('fnPath') as string
+      const repo = r.get('repo') as string
+      const ls = r.get('ls')
+      const le = r.get('le')
+      const lineStart = typeof ls === 'number' ? ls : ls?.toNumber?.() ?? -1
+      const lineEnd = typeof le === 'number' ? le : le?.toNumber?.() ?? -1
+
+      if (!anchoredHash) continue  // no baseline hash, skip
+
+      const diskHash = getDiskHash(fnId, fnPath, repo, lineStart, lineEnd)
+      if (!diskHash) continue
+
+      if (diskHash !== anchoredHash && currentStaleness === 'active') {
+        toVoid.push(dId)
+        details.push({ functionId: fnId, functionName: fnName, filePath: fnPath, action: 'voided' })
+      } else if (diskHash === anchoredHash && currentStaleness === 'code_changed') {
+        toReactivate.push(dId)
+        details.push({ functionId: fnId, functionName: fnName, filePath: fnPath, action: 'reactivated' })
+      }
+    }
+
+    const now = new Date().toISOString()
+
+    // Mark voided
     let voidedCount = 0
-    if (changedFnIds.length > 0) {
-      const now = new Date().toISOString()
-      const markResult = await session.run(
-        `UNWIND $ids AS fnId
-         MATCH (d:DecisionContext {staleness: 'active'})-[:ANCHORED_TO]->(e:CodeEntity {id: fnId})
+    if (toVoid.length > 0) {
+      const r = await session.run(
+        `UNWIND $ids AS dId
+         MATCH (d:DecisionContext {id: dId})
          SET d.staleness = 'code_changed',
              d.staleness_reason = 'Function content changed since decision was extracted',
              d.staleness_detected_at = $now
-         RETURN count(DISTINCT d) AS cnt`,
-        { ids: changedFnIds, now }
+         RETURN count(d) AS cnt`,
+        { ids: toVoid, now }
       )
-      voidedCount = markResult.records[0]?.get('cnt')?.toNumber?.() ?? markResult.records[0]?.get('cnt') ?? 0
+      voidedCount = r.records[0]?.get('cnt')?.toNumber?.() ?? r.records[0]?.get('cnt') ?? 0
+    }
+
+    // Reactivate reverted
+    let reactivatedCount = 0
+    if (toReactivate.length > 0) {
+      const r = await session.run(
+        `UNWIND $ids AS dId
+         MATCH (d:DecisionContext {id: dId})
+         SET d.staleness = 'active',
+             d.staleness_reason = null,
+             d.staleness_detected_at = null
+         RETURN count(d) AS cnt`,
+        { ids: toReactivate, now }
+      )
+      reactivatedCount = r.records[0]?.get('cnt')?.toNumber?.() ?? r.records[0]?.get('cnt') ?? 0
     }
 
     lastStalenessCheck = {
-      checkedAt: new Date().toISOString(),
+      checkedAt: now,
       voidedCount,
-      totalActive: totalDecisions,
-      percentage: totalDecisions > 0 ? ((voidedCount / totalDecisions) * 100).toFixed(1) : '0',
+      reactivatedCount,
+      totalChecked: result.records.length,
+      percentage: result.records.length > 0 ? ((voidedCount / result.records.length) * 100).toFixed(1) : '0',
       details,
     }
 
@@ -1637,7 +1673,7 @@ app.post('/api/system/staleness-check', async (c) => {
 })
 
 app.get('/api/system/staleness-check', (c) => {
-  return c.json(lastStalenessCheck ?? { checkedAt: null, voidedCount: 0, totalActive: 0, percentage: '0', details: [] })
+  return c.json(lastStalenessCheck ?? { checkedAt: null, voidedCount: 0, reactivatedCount: 0, totalChecked: 0, percentage: '0', details: [] })
 })
 
 // ── AI Configuration API ────────────────────────────────

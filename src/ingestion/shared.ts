@@ -324,6 +324,7 @@ export async function batchWriteDecisions(
        MATCH (fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
        MATCH (f:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
        MERGE (dc)-[:ANCHORED_TO]->(fn)
+       SET dc.anchored_content_hash = fn.content_hash
        RETURN fn.id`,
       { dcId: d.id, fnName: d.functionName, repo: d.repo, filePath: d.filePath }
     )
