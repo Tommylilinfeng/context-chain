@@ -18,8 +18,32 @@ const DEFAULT_CONFIG: AIConfig = {
   provider: 'claude-cli',
 }
 
+/**
+ * Validate that AI config is usable. Returns error message or null if OK.
+ * Use this to fail fast before starting long-running pipelines.
+ */
+export function validateAIConfig(config?: AIConfig): string | null {
+  const c = config ?? DEFAULT_CONFIG
+  if (!c || typeof c !== 'object') {
+    return 'AI configuration missing. Add "ai" section to ckg.config.json (e.g. {"ai": {"provider": "claude-cli"}}) or set ANTHROPIC_API_KEY env var.'
+  }
+  if (!c.provider) {
+    return 'AI provider not specified. Set "ai.provider" in ckg.config.json to "claude-cli", "anthropic-api", or "codex-cli".'
+  }
+  if (c.provider === 'anthropic-api' && !c.apiKey && !process.env.ANTHROPIC_API_KEY) {
+    return 'Anthropic API key not set. Set "ai.apiKey" in ckg.config.json or ANTHROPIC_API_KEY env var.'
+  }
+  if (!['claude-cli', 'anthropic-api', 'codex-cli'].includes(c.provider)) {
+    return `Unknown AI provider: "${c.provider}". Use "claude-cli", "anthropic-api", or "codex-cli".`
+  }
+  return null
+}
+
 export function createAIProvider(config?: AIConfig): AIProvider {
   const c = config ?? DEFAULT_CONFIG
+
+  const err = validateAIConfig(c)
+  if (err) throw new Error(err)
 
   switch (c.provider) {
     case 'claude-cli':

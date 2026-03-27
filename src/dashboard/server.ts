@@ -51,6 +51,11 @@ import {
   createPendingEdges, connectDecisions, getPendingStatus,
   BatchProgressEvent,
 } from '../ingestion/connect-decisions'
+import {
+  createRunRecord, finalizeAndSave, appendRunRecord, loadRunHistory, saveRunHistory, computeRunHistoryStats,
+  RunRecord, RunType,
+} from '../ingestion/run-history'
+import { validateAIConfig } from '../ai'
 
 const app = new Hono()
 app.use('*', cors())
@@ -664,6 +669,7 @@ app.post('/api/coverage/analyze-function', async (c) => {
 
     const templateName = advancedMode ? '_advanced' : '_default'
 
+    const fnStartTime = Date.now()
     const result = await analyzeFunction({
       functionName, filePath, repo,
       repoPath: repoConfig.path,
@@ -687,7 +693,26 @@ app.post('/api/coverage/analyze-function', async (c) => {
       saveRunState(state)
     }
 
-
+    // Record per-function history
+    const fnInput = result.metadata.token_usage?.input_tokens ?? 0
+    const fnOutput = result.metadata.token_usage?.output_tokens ?? 0
+    const fnCacheCreate = result.metadata.token_usage?.cache_creation_input_tokens ?? 0
+    const fnCacheRead = result.metadata.token_usage?.cache_read_input_tokens ?? 0
+    const fnRecord = createRunRecord('analyze', {
+      repo, template: templateName,
+      model: config.ai?.model,
+      functionName, filePath,
+      inputTokens: fnInput,
+      outputTokens: fnOutput,
+      cacheCreationTokens: fnCacheCreate || undefined,
+      cacheReadTokens: fnCacheRead || undefined,
+      decisionsCreated: decCount,
+      functionsAnalyzed: 1,
+    })
+    fnRecord.durationMs = Date.now() - fnStartTime
+    fnRecord.completedAt = new Date().toISOString()
+    fnRecord.totalTokens = fnInput + fnOutput
+    appendRunRecord(fnRecord)
 
     return c.json({
       status: 'done',
@@ -1223,6 +1248,12 @@ app.post('/api/system/run', async (c) => {
         `const {getSession,verifyConnectivity,closeDriver}=require('./src/db/client');(async()=>{await verifyConnectivity();const s=await getSession();const r=await s.run('MATCH (d:DecisionContext) DETACH DELETE d RETURN count(d) AS cnt');console.log('Deleted '+r.records[0].get('cnt')+' decisions');await s.close();await closeDriver()})()`,
       ],
     })
+    // Also clear run history and analyze state
+    saveRunHistory([])
+    try {
+      const stateFile = path.resolve(__dirname, '../../data/analyze-state.json')
+      if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile)
+    } catch {}
   }
 
   if (steps.length === 0) {
@@ -1881,6 +1912,14 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
 
     const remaining = allFunctions.filter(fn => !analyzedSet.has(`${fn.filePath}::${fn.name}`))
 
+    // Run history tracking
+    const templateName = advancedConfig?.advancedMode ? '_advanced' : '_default'
+    const historyRecord = createRunRecord('analyze-batch', {
+      repo,
+      template: templateName,
+      model: config.ai?.model,
+    })
+
     pushLog(runJob.logs, `Starting analysis: ${remaining.length} functions (${analyzedSet.size} skipped)`)
     pushLog(runJob.logs, JSON.stringify({ type: 'progress', analyzed: 0, decisions: 0, total: runJob.total, skipped: runJob.skipped }))
 
@@ -1931,6 +1970,18 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
         runJob.analyzed++
         runJob.decisions += decCount
 
+        // Accumulate batch-level totals
+        const fnInput = result.metadata.token_usage?.input_tokens ?? 0
+        const fnOutput = result.metadata.token_usage?.output_tokens ?? 0
+        const fnCacheCreate = result.metadata.token_usage?.cache_creation_input_tokens ?? 0
+        const fnCacheRead = result.metadata.token_usage?.cache_read_input_tokens ?? 0
+        historyRecord.inputTokens += fnInput
+        historyRecord.outputTokens += fnOutput
+        historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + fnCacheCreate
+        historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + fnCacheRead
+        historyRecord.functionsAnalyzed++
+        historyRecord.decisionsCreated += decCount
+
         if (decCount > 0) {
           await batchWriteDecisions(workerSession, result.decisions)
           const newIds = result.decisions.map(d => d.id)
@@ -1947,8 +1998,33 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           type: 'function-done', name: fn.name, file: fn.filePath,
           decisions: decCount, duration: durSec, index: fnIdx,
         }))
+
+        // Per-function history record
+        const fnRecord = createRunRecord('analyze', {
+          repo,
+          template: templateName,
+          model: historyRecord.model,
+          functionName: fn.name,
+          filePath: fn.filePath,
+          batchId: historyRecord.id,
+          inputTokens: fnInput,
+          outputTokens: fnOutput,
+          cacheCreationTokens: fnCacheCreate || undefined,
+          cacheReadTokens: fnCacheRead || undefined,
+          decisionsCreated: decCount,
+          functionsAnalyzed: 1,
+        })
+        fnRecord.durationMs = result.metadata.duration_ms
+        fnRecord.completedAt = new Date().toISOString()
+        fnRecord.totalTokens = fnInput + fnOutput
+        appendRunRecord(fnRecord)
+
+        // Only mark as analyzed on success — errors will be retried on next run
+        state.analyzed.push(`${fn.filePath}::${fn.name}`)
+        saveRunState(state)
       } catch (err: any) {
         if (fnIdx >= 0) runJob.functions[fnIdx].status = 'error'
+        historyRecord.errors++
         pushLog(runJob.logs, JSON.stringify({
           type: 'function-error', name: fn.name, file: fn.filePath,
           error: err.message, stack: err.stack?.split('\n')[1]?.trim(), index: fnIdx,
@@ -1956,10 +2032,6 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       } finally {
         await workerSession.close()
       }
-
-      // Save state every function for crash resilience
-      state.analyzed.push(`${fn.filePath}::${fn.name}`)
-      saveRunState(state)
 
       pushLog(runJob.logs, JSON.stringify({
         type: 'progress', analyzed: runJob.analyzed, decisions: runJob.decisions,
@@ -1971,14 +2043,21 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
 
     if (runJob.abortRequested) {
       runJob.status = 'idle'
+      historyRecord.aborted = true
       pushLog(runJob.logs, JSON.stringify({ type: 'stopped', analyzed: runJob.analyzed, decisions: runJob.decisions }))
     } else {
       runJob.status = 'done'
       pushLog(runJob.logs, JSON.stringify({ type: 'done', analyzed: runJob.analyzed, decisions: runJob.decisions }))
     }
+
+    // Persist run history
+    finalizeAndSave(historyRecord)
   } catch (err: any) {
     runJob.status = 'error'
     pushLog(runJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    // Still save partial history
+    historyRecord.errors++
+    finalizeAndSave(historyRecord)
     // initSession may still be open if error happened before close
     try { await initSession.close() } catch {}
   }
@@ -2012,6 +2091,10 @@ app.post('/api/run/start', async (c) => {
   if (!config.repos.find((r: any) => r.name === repo)) {
     return c.json({ error: `Repo "${repo}" not found in config` }, 400)
   }
+
+  // Validate AI provider is configured before starting
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
 
   // Save analysis config if changed
   if (summaryWords || contentWords) {
@@ -2152,6 +2235,11 @@ app.post('/api/group/start', async (c) => {
     return c.json({ error: 'Grouping already running' }, 409)
   }
 
+  // Validate AI provider before starting
+  const grpConfig = loadConfig()
+  const grpAiErr = validateAIConfig(grpConfig.ai)
+  if (grpAiErr) return c.json({ error: grpAiErr }, 400)
+
   const body = await c.req.json()
   const { mode = 'summary', batchSize = 50 } = body
 
@@ -2170,6 +2258,12 @@ app.post('/api/group/start', async (c) => {
     try {
       const config = loadConfig()
       const ai = createAIProvider(config.ai)
+
+      // Run history tracking for connect/grouping
+      const historyRecord = createRunRecord('connect', {
+        model: config.ai?.model,
+        template: mode,
+      })
 
       pushLog(groupJob.logs,JSON.stringify({ type: 'started', mode, batchSize }))
 
@@ -2225,17 +2319,26 @@ app.post('/api/group/start', async (c) => {
         },
       })
 
+      // Persist run history
+      historyRecord.inputTokens = ai.totalUsage.input_tokens
+      historyRecord.outputTokens = ai.totalUsage.output_tokens
+      historyRecord.edgesCreated = groupJob.edgesFound
+
       ai.cleanup()
 
       if (groupJob.abortRequested) {
         groupJob.status = 'idle'
+        historyRecord.aborted = true
         pushLog(groupJob.logs,JSON.stringify({ type: 'stopped', batchesDone: groupJob.batchesDone, edgesFound: groupJob.edgesFound }))
       } else {
         groupJob.status = 'done'
         pushLog(groupJob.logs,JSON.stringify({ type: 'done', batchesDone: groupJob.batchesDone, edgesFound: groupJob.edgesFound }))
       }
+      finalizeAndSave(historyRecord)
     } catch (err: any) {
       groupJob.status = 'error'
+      historyRecord.errors++
+      finalizeAndSave(historyRecord)
       pushLog(groupJob.logs,JSON.stringify({ type: 'error', error: err.message }))
     } finally {
       await session.close()
@@ -2664,6 +2767,11 @@ app.post('/api/sessions/:id/analyze', async (c) => {
   let state = loadSessionState(session.id)
   if (!state?.phase1) return c.json({ error: 'Run segmentation first' }, 400)
 
+  // Validate AI provider before starting
+  const sessCfg = loadConfig()
+  const sessAiErr = validateAIConfig(sessCfg.ai)
+  if (sessAiErr) return c.json({ error: sessAiErr }, 400)
+
   setPhase2Started(state, body.approved)
   saveSessionState(state)
 
@@ -2681,6 +2789,14 @@ app.post('/api/sessions/:id/analyze', async (c) => {
       const ai = createAIProvider(config.ai)
       const phase0 = getOrParsePhase0(session.id, session.filePath, session.project)
       const dbSession = await getSession()
+
+      // Run history tracking for session ingest
+      const historyRecord = createRunRecord('session-ingest', {
+        sessionId: session.id,
+        repo: session.project,
+        model: config.ai?.model,
+        template: 'session-ingestion',
+      })
 
       try {
         const bizCtx = await getBusinessContext(dbSession)
@@ -2838,6 +2954,14 @@ app.post('/api/sessions/:id/analyze', async (c) => {
         setPhase2Done(state!, totalEdges)
         saveSessionState(state!)
 
+        // Persist run history from AI provider totals
+        historyRecord.inputTokens = ai.totalUsage.input_tokens
+        historyRecord.outputTokens = ai.totalUsage.output_tokens
+        historyRecord.decisionsCreated = allDecisions.length
+        historyRecord.edgesCreated = totalEdges
+        historyRecord.segmentsProcessed = body.approved.length
+        finalizeAndSave(historyRecord)
+
         ai.cleanup()
 
         log(`Done: ${allDecisions.length} decisions, ${totalEdges} edges`)
@@ -2848,6 +2972,11 @@ app.post('/api/sessions/:id/analyze', async (c) => {
     } catch (err: any) {
       setError(state!, err.message)
       saveSessionState(state!)
+      // Save partial history on error
+      historyRecord.inputTokens = ai.totalUsage.input_tokens
+      historyRecord.outputTokens = ai.totalUsage.output_tokens
+      historyRecord.errors++
+      finalizeAndSave(historyRecord)
       log(`Error: ${err.message}`)
       sessionJobs.get(jobId)!.status = 'error'
     }
@@ -2949,6 +3078,36 @@ app.post('/api/search/semantic', async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
+})
+
+// ── API: Run History ──────────────────────────────────
+
+app.get('/api/run-history', (c) => {
+  const records = loadRunHistory()
+  const type = c.req.query('type') as RunType | undefined
+  const template = c.req.query('template')
+  const repo = c.req.query('repo')
+  const days = c.req.query('days') ? parseInt(c.req.query('days')!) : undefined
+
+  const stats = computeRunHistoryStats(records, { type, template, repo, days })
+  return c.json(stats)
+})
+
+app.get('/api/run-history/records', (c) => {
+  const records = loadRunHistory()
+  const limit = parseInt(c.req.query('limit') ?? '100')
+  const offset = parseInt(c.req.query('offset') ?? '0')
+  // Most recent first
+  const reversed = [...records].reverse()
+  return c.json({
+    total: records.length,
+    records: reversed.slice(offset, offset + limit),
+  })
+})
+
+app.delete('/api/run-history', (c) => {
+  saveRunHistory([])
+  return c.json({ ok: true })
 })
 
 // ── API: Feedback stats ────────────────────────────────
@@ -3280,6 +3439,12 @@ app.get('/overview', (c) => {
 
 app.get('/dependencies', (c) => {
   const htmlPath = path.resolve(__dirname, 'public', 'dependencies.html')
+  const html = fs.readFileSync(htmlPath, 'utf-8')
+  return c.html(html)
+})
+
+app.get('/history', (c) => {
+  const htmlPath = path.resolve(__dirname, 'public', 'history.html')
   const html = fs.readFileSync(htmlPath, 'utf-8')
   return c.html(html)
 })

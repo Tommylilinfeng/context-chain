@@ -87,9 +87,13 @@ export class ClaudeCLIProvider implements AIProvider {
             this.lastUsage = {
               input_tokens: wrapper.usage.input_tokens ?? 0,
               output_tokens: wrapper.usage.output_tokens ?? 0,
+              cache_creation_input_tokens: wrapper.usage.cache_creation_input_tokens ?? 0,
+              cache_read_input_tokens: wrapper.usage.cache_read_input_tokens ?? 0,
             }
             this.totalUsage.input_tokens += this.lastUsage.input_tokens
             this.totalUsage.output_tokens += this.lastUsage.output_tokens
+            this.totalUsage.cache_creation_input_tokens = (this.totalUsage.cache_creation_input_tokens ?? 0) + (this.lastUsage.cache_creation_input_tokens ?? 0)
+            this.totalUsage.cache_read_input_tokens = (this.totalUsage.cache_read_input_tokens ?? 0) + (this.lastUsage.cache_read_input_tokens ?? 0)
           }
 
           const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()

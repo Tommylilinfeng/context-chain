@@ -18,7 +18,7 @@
 import path from 'path'
 import { Session } from 'neo4j-driver'
 import { getSession, verifyConnectivity } from '../db/client'
-import { createAIProvider } from '../ai'
+import { createAIProvider, AIProvider } from '../ai'
 import { loadConfig } from '../config'
 import { loadTemplate } from './template-loader'
 import {
@@ -341,10 +341,10 @@ function buildDefaultPrompt(
   const calleeSection = formatCalleeSection(input.functionName, context.callees)
   const customSection = config.custom_context ? `\n## Additional Context:\n${config.custom_context}\n` : ''
   const tableSection = context.tableAccess?.length
-    ? `\n## Database tables accessed by ${input.functionName}: ${context.tableAccess.join(', ')}\n`
+    ? `\n## Database tables accessed: ${context.tableAccess.join(', ')}\n`
     : ''
   const fileCtxSection = context.fileContext?.length
-    ? `\n## Other functions in ${input.filePath}: ${context.fileContext.join(', ')}\n`
+    ? `\n## Other functions in same file: ${context.fileContext.join(', ')}\n`
     : ''
 
   const findingTypeDesc = config.finding_types.includes('bug') || config.finding_types.includes('suboptimal')
@@ -361,17 +361,14 @@ Default to "decision" unless you have clear evidence otherwise.`
   const langGuide = config.language === 'zh' ? '\nRespond in Chinese.' :
     config.language === 'en' ? '\nRespond in English.' : ''
 
-  return `You are doing a deep analysis of a single function to extract design decisions.
+  // ── Stable prefix (identical across all function analyses → KV cache hit) ──
+  // Everything above the "---" marker is the same for every function in a batch.
+  // Anthropic's prompt cache matches the longest identical token prefix, so
+  // keeping instructions first maximizes cache reuse across calls.
 
-${goalSection}${bizSection}${customSection}
-## Target function: ${input.functionName} (file: ${input.filePath})
-\`\`\`
-${context.targetCode}
-\`\`\`
-${callerSection}${calleeSection}${tableSection}${fileCtxSection}
+  const stablePrefix = `You are doing a deep analysis of a single function to extract design decisions.
+
 ## Instructions
-
-Analyze ${input.functionName} and extract up to ${config.max_decisions} design decisions.
 
 A design decision explains:
 - WHY this approach was chosen over alternatives
@@ -379,9 +376,11 @@ A design decision explains:
 - WHAT alternatives were considered
 ${findingTypeDesc}
 
+For the target function provided below, extract up to ${config.max_decisions} design decisions.
+
 Return ONLY a raw JSON array (no markdown, no backticks):
 [{
-  "function": "${input.functionName}",
+  "function": "<function_name>",
   "related_functions": ["otherFunc1"],
   "summary": "${summaryGuide} — the decision with enough context to understand without seeing the code",
   "content": "200-600 chars explaining WHY, trade-offs, alternatives",
@@ -389,7 +388,20 @@ Return ONLY a raw JSON array (no markdown, no backticks):
   "finding_type": "${config.finding_types[0]}"${config.finding_types.includes('bug') || config.finding_types.includes('suboptimal') ? ',\n  "critique": "only for suboptimal/bug"' : ''}
 }]
 
-Empty array [] if no decisions worth recording.${langGuide}`
+Empty array [] if no decisions worth recording.${langGuide}
+${goalSection}${bizSection}${customSection}`
+
+  // ── Variable suffix (different per function) ──
+
+  const variableSuffix = `---
+
+## Target function: ${input.functionName} (file: ${input.filePath})
+\`\`\`
+${context.targetCode}
+\`\`\`
+${callerSection}${calleeSection}${tableSection}${fileCtxSection}`
+
+  return stablePrefix + variableSuffix
 }
 
 // ── Advanced mode: graph queries ─────────────────────────
@@ -799,6 +811,7 @@ export async function analyzeFunction(
     session = await getSession()
   }
 
+  let ai: AIProvider | null = null
   try {
     // 3. 获取函数行号（如果没提供）
     let lineStart = input.lineStart
@@ -933,7 +946,7 @@ export async function analyzeFunction(
     const aiConfig = config.ai_provider || config.model
       ? { ...appConfig.ai, ...(config.ai_provider ? { provider: config.ai_provider } : {}), ...(config.model ? { model: config.model } : {}) }
       : appConfig.ai
-    const ai = createAIProvider(aiConfig as any)
+    ai = createAIProvider(aiConfig as any)
 
     const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms })
 
@@ -1015,7 +1028,7 @@ export async function analyzeFunction(
       },
     }
   } finally {
-    ai.cleanup()
+    ai?.cleanup()
     if (ownSession) {
       await session.close()
     }

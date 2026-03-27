@@ -440,7 +440,7 @@ async function fullScan(): Promise<void> {
         }
       } catch (err: any) {
         console.log(`  ${progressStr} ${fn.filePath}::${fn.name} — ✗ ${err.message}`)
-        state.analyzed.push(`${fn.filePath}::${fn.name}`)
+        // Don't mark errored functions as analyzed — they will be retried on next run
         summary.functionsFailed++
       }
     }

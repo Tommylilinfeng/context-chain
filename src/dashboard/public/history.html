@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CKG — Run History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+/* ── Stats Grid ─────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  padding: 24px 40px 0;
+}
+.stat-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+  transition: all var(--transition-fast);
+}
+.stat-card:hover { border-color: var(--border); box-shadow: var(--shadow-hover); }
+.stat-value {
+  font-size: 28px; font-weight: 700; font-family: var(--mono);
+  letter-spacing: -1px;
+}
+.stat-label {
+  font-size: 12px; color: var(--text-dim); margin-top: 6px;
+  font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.stat-value.blue { color: var(--accent); }
+.stat-value.green { color: var(--green); }
+.stat-value.yellow { color: var(--yellow); }
+.stat-value.purple { color: var(--purple); }
+.stat-value.cyan { color: var(--cyan); }
+
+/* ── Filters ─────────────────────────────────────── */
+.filters-bar {
+  display: flex; gap: 12px; padding: 20px 40px;
+  align-items: center; flex-wrap: wrap;
+}
+.filter-group { display: flex; gap: 6px; align-items: center; }
+.filter-label { font-size: 12px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.filter-btn {
+  padding: 6px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface-1);
+  color: var(--text-secondary); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all var(--transition-fast);
+  font-family: var(--sans);
+}
+.filter-btn:hover { border-color: var(--accent); color: var(--text); }
+.filter-btn.active { background: var(--accent-surface); border-color: var(--accent); color: var(--accent); }
+
+/* ── Charts Layout ───────────────────────────────── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 300px;
+  gap: 16px;
+  padding: 0 40px 20px;
+}
+.chart-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+  display: flex; flex-direction: column;
+}
+.chart-card h3 {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  margin-bottom: 12px; flex-shrink: 0;
+}
+.chart-wrap { position: relative; flex: 1; min-height: 200px; max-height: 240px; }
+
+/* ── Template Table ──────────────────────────────── */
+.table-section { padding: 0 40px 20px; }
+.table-section h3 {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  margin-bottom: 12px;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.data-table th, .data-table td {
+  padding: 10px 16px; text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+.data-table th {
+  background: var(--surface-2); color: var(--text-dim);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  font-size: 11px;
+}
+.data-table td { color: var(--text-secondary); }
+.data-table td.mono { font-family: var(--mono); font-size: 12px; }
+.data-table tr:hover td { background: var(--surface-2); }
+
+/* ── Run List ────────────────────────────────────── */
+.run-list { padding: 0 40px 40px; }
+.run-list h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.run-item {
+  display: grid; grid-template-columns: 100px 110px 90px 1fr 90px 70px 80px 70px;
+  gap: 8px; align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+  transition: background var(--transition-fast);
+}
+.run-item:hover { background: var(--surface-2); }
+.run-item .time { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.run-item .type-badge {
+  display: inline-block; padding: 3px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; font-family: var(--mono);
+}
+.type-analyze-batch { background: var(--accent-surface); color: var(--accent); }
+.type-session-ingest { background: var(--green-surface); color: var(--green); }
+.type-connect { background: var(--purple-surface); color: var(--purple); }
+.type-keyword-normalize { background: var(--yellow-surface); color: var(--yellow); }
+.type-analyze { background: rgba(249,115,22,0.08); color: var(--orange); }
+.run-item .tokens { font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
+.run-item .decisions { font-family: var(--mono); font-size: 12px; color: var(--green); }
+.run-item .duration { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.run-item .meta { color: var(--text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.empty-state {
+  text-align: center; padding: 60px; color: var(--text-dim); font-size: 14px;
+}
+</style>
+</head>
+<body>
+<nav class="sidebar" id="sidebar"></nav>
+<div class="main">
+  <div class="page-hero">
+    <h2>History</h2>
+    <p class="subtitle">Pipeline run statistics and token usage</p>
+  </div>
+
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="stat-value blue" id="totalRuns">-</div><div class="stat-label">Total Runs</div></div>
+    <div class="stat-card"><div class="stat-value yellow" id="totalTokens">-</div><div class="stat-label">Total Tokens</div></div>
+    <div class="stat-card"><div class="stat-value green" id="totalDecisions">-</div><div class="stat-label">Decisions Created</div></div>
+    <div class="stat-card"><div class="stat-value purple" id="totalEdges">-</div><div class="stat-label">Edges Created</div></div>
+    <div class="stat-card"><div class="stat-value cyan" id="avgTokens">-</div><div class="stat-label">Avg Tokens / Analysis</div></div>
+    <div class="stat-card"><div class="stat-value green" id="cacheHitRate">-</div><div class="stat-label">Cache Hit Rate</div></div>
+  </div>
+
+  <div class="filters-bar">
+    <div class="filter-group">
+      <span class="filter-label">Type:</span>
+      <button class="filter-btn active" data-type="">All</button>
+      <button class="filter-btn" data-type="analyze-batch">Analyze</button>
+      <button class="filter-btn" data-type="session-ingest">Session</button>
+      <button class="filter-btn" data-type="connect">Connect</button>
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">Period:</span>
+      <button class="filter-btn" data-days="">All Time</button>
+      <button class="filter-btn active" data-days="30">30d</button>
+      <button class="filter-btn" data-days="7">7d</button>
+      <button class="filter-btn" data-days="1">Today</button>
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Token Usage Over Time</h3>
+      <div class="chart-wrap"><canvas id="tokenChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Runs by Type</h3>
+      <div class="chart-wrap"><canvas id="typeChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Decisions Created Over Time</h3>
+      <div class="chart-wrap"><canvas id="decisionChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <h3>Tokens by Template</h3>
+      <div class="chart-wrap"><canvas id="templateChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="table-section">
+    <h3>Per-Template Statistics</h3>
+    <table class="data-table" id="templateTable">
+      <thead><tr>
+        <th>Template</th><th>Runs</th><th>Total Tokens</th><th>Decisions</th><th>Avg Tokens / Decision</th>
+      </tr></thead>
+      <tbody id="templateTableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="run-list">
+    <h3>Recent Runs</h3>
+    <div class="run-item" style="font-weight:600;color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:0.5px">
+      <span>Time</span><span>Type</span><span>Template</span><span>Function</span><span>Tokens</span><span>Cache</span><span>Decisions</span><span>Duration</span>
+    </div>
+    <div id="runList"></div>
+  </div>
+</div>
+
+<script src="/sidebar.js"></script>
+<script>
+const COLORS = {
+  accent: '#4d8eff', green: '#34d27b', yellow: '#e8b931',
+  purple: '#a78bfa', cyan: '#22d3ee', orange: '#f97316', pink: '#ec4899',
+  red: '#f05656',
+}
+const TYPE_COLORS = {
+  'analyze-batch': COLORS.accent,
+  'session-ingest': COLORS.green,
+  'connect': COLORS.purple,
+  'keyword-normalize': COLORS.yellow,
+  'analyze': COLORS.orange,
+}
+
+let currentType = ''
+let currentDays = '30'
+let charts = {}
+
+function fmtTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return String(n)
+}
+
+function fmtDuration(ms) {
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + 'm'
+  return (ms / 1000).toFixed(1) + 's'
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso)
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${h}:${m}`
+}
+
+// ── Filters ──────────────────────────────────────
+document.querySelectorAll('[data-type]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+    currentType = btn.dataset.type
+    loadData()
+  })
+})
+document.querySelectorAll('[data-days]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-days]').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+    currentDays = btn.dataset.days
+    loadData()
+  })
+})
+
+// ── Chart defaults ───────────────────────────────
+Chart.defaults.color = '#5c6478'
+Chart.defaults.borderColor = '#1e232d'
+Chart.defaults.font.family = "'DM Sans', sans-serif"
+Chart.defaults.font.size = 11
+
+function chartOpts(type, extra) {
+  const base = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+  }
+  if (type === 'line' || type === 'bar') {
+    base.scales = {
+      x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 20 } },
+      y: { grid: { color: '#1e232d' }, ticks: { callback: v => fmtTokens(v) } },
+    }
+  }
+  return { ...base, ...extra }
+}
+
+function makeOrUpdate(id, type, data, opts) {
+  if (charts[id]) {
+    charts[id].data = data
+    charts[id].options = { ...charts[id].options, ...opts }
+    charts[id].update()
+    return
+  }
+  charts[id] = new Chart(document.getElementById(id), { type, data, options: opts })
+}
+
+// ── Load data ────────────────────────────────────
+async function loadData() {
+  const params = new URLSearchParams()
+  if (currentType) params.set('type', currentType)
+  if (currentDays) params.set('days', currentDays)
+
+  try {
+    const res = await fetch('/api/run-history?' + params)
+    const data = await res.json()
+    renderStats(data)
+    renderCharts(data)
+    renderTemplateTable(data)
+    renderRunList(data.recentRuns || [])
+  } catch (err) {
+    console.error('Failed to load history:', err)
+  }
+}
+
+function renderStats(data) {
+  // Exclude analyze-batch from stats (individual analyze records already cover the data)
+  var batch = data.byType['analyze-batch'] || { count: 0, tokens: 0, decisions: 0 }
+  document.getElementById('totalRuns').textContent = (data.totalRuns - batch.count).toLocaleString()
+  document.getElementById('totalTokens').textContent = fmtTokens(data.totalTokens - batch.tokens)
+  document.getElementById('totalDecisions').textContent = (data.totalDecisions - batch.decisions).toLocaleString()
+  document.getElementById('totalEdges').textContent = data.totalEdges.toLocaleString()
+
+  // Avg tokens per function analysis (type=analyze only)
+  var analyzeStats = data.byType['analyze']
+  document.getElementById('avgTokens').textContent = analyzeStats && analyzeStats.count > 0
+    ? fmtTokens(Math.round(analyzeStats.tokens / analyzeStats.count)) : '-'
+
+  // Cache hit rate (from all non-batch records)
+  var cacheRead = data.totalCacheReadTokens || 0
+  var cacheCreate = data.totalCacheCreationTokens || 0
+  var totalInput = cacheRead + cacheCreate + (data.totalInputTokens || 0) - batch.tokens
+  if (totalInput > 0 && cacheRead > 0) {
+    document.getElementById('cacheHitRate').textContent = Math.round(cacheRead / totalInput * 100) + '%'
+  } else {
+    document.getElementById('cacheHitRate').textContent = '-'
+  }
+}
+
+function renderCharts(data) {
+  // Token usage over time (bar)
+  const days = data.byDay || []
+  makeOrUpdate('tokenChart', 'bar', {
+    labels: days.map(d => d.date.slice(5)), // MM-DD
+    datasets: [{
+      data: days.map(d => d.tokens),
+      backgroundColor: COLORS.accent + '40',
+      borderColor: COLORS.accent,
+      borderWidth: 1, borderRadius: 3,
+    }],
+  }, chartOpts('bar'))
+
+  // Runs by type (doughnut) — exclude analyze-batch
+  const types = Object.entries(data.byType || {}).filter(([k]) => k !== 'analyze-batch')
+  makeOrUpdate('typeChart', 'doughnut', {
+    labels: types.map(([k]) => k),
+    datasets: [{
+      data: types.map(([, v]) => v.count),
+      backgroundColor: types.map(([k]) => (TYPE_COLORS[k] || COLORS.accent) + '80'),
+      borderColor: types.map(([k]) => TYPE_COLORS[k] || COLORS.accent),
+      borderWidth: 1,
+    }],
+  }, {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { display: true, position: 'right', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+    },
+  })
+
+  // Decisions over time (line)
+  makeOrUpdate('decisionChart', 'line', {
+    labels: days.map(d => d.date.slice(5)),
+    datasets: [{
+      data: days.map(d => d.decisions),
+      borderColor: COLORS.green,
+      backgroundColor: COLORS.green + '20',
+      fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2,
+    }],
+  }, chartOpts('line', { scales: {
+    x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 20 } },
+    y: { grid: { color: '#1e232d' }, ticks: { callback: v => v } },
+  }}))
+
+  // Tokens by template (horizontal bar)
+  const templates = Object.entries(data.byTemplate || {})
+  makeOrUpdate('templateChart', 'bar', {
+    labels: templates.map(([k]) => k),
+    datasets: [{
+      data: templates.map(([, v]) => v.tokens),
+      backgroundColor: [COLORS.accent+'80', COLORS.green+'80', COLORS.purple+'80', COLORS.yellow+'80', COLORS.orange+'80', COLORS.cyan+'80'],
+      borderWidth: 0, borderRadius: 3,
+    }],
+  }, {
+    responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: '#1e232d' }, ticks: { callback: v => fmtTokens(v) } },
+      y: { grid: { display: false } },
+    },
+  })
+}
+
+function renderTemplateTable(data) {
+  const tbody = document.getElementById('templateTableBody')
+  const templates = Object.entries(data.byTemplate || {})
+  if (templates.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-dim)">No data</td></tr>'
+    return
+  }
+  tbody.innerHTML = templates
+    .sort(([,a], [,b]) => b.tokens - a.tokens)
+    .map(([name, v]) => `
+      <tr>
+        <td><strong>${esc(name)}</strong></td>
+        <td class="mono">${v.count}</td>
+        <td class="mono">${fmtTokens(v.tokens)}</td>
+        <td class="mono">${v.decisions.toLocaleString()}</td>
+        <td class="mono">${v.avgTokensPerDecision > 0 ? fmtTokens(v.avgTokensPerDecision) : '-'}</td>
+      </tr>
+    `).join('')
+}
+
+function cacheRate(r) {
+  var total = (r.inputTokens || 0) + (r.cacheCreationTokens || 0) + (r.cacheReadTokens || 0)
+  if (total <= 0 || !r.cacheReadTokens) return '-'
+  return Math.round(r.cacheReadTokens / total * 100) + '%'
+}
+
+function renderRunList(runs) {
+  const el = document.getElementById('runList')
+  // Filter out analyze-batch — individual analyze records already cover the data
+  const filtered = runs.filter(r => r.type !== 'analyze-batch')
+  if (filtered.length === 0) {
+    el.innerHTML = '<div class="empty-state">No runs recorded yet. Run an analysis pipeline to see history here.</div>'
+    return
+  }
+  el.innerHTML = filtered.map(r => {
+    const typeClass = 'type-' + r.type
+    const tmpl = r.template || '-'
+    const fnLabel = r.functionName ? (r.filePath ? r.filePath + '::' : '') + r.functionName : (r.sessionId ? 'session:' + r.sessionId.slice(0, 8) : r.repo || '-')
+    const cache = cacheRate(r)
+    return `<div class="run-item">
+      <span class="time">${fmtTime(r.startedAt)}</span>
+      <span><span class="type-badge ${typeClass}">${r.type}</span></span>
+      <span class="meta">${esc(tmpl)}</span>
+      <span class="meta">${esc(fnLabel)}</span>
+      <span class="tokens">${fmtTokens(r.totalTokens)}</span>
+      <span class="tokens" style="color:${cache !== '-' ? 'var(--green)' : 'var(--text-dim)'}">${cache}</span>
+      <span class="decisions">${r.decisionsCreated > 0 ? '+' + r.decisionsCreated : r.edgesCreated > 0 ? r.edgesCreated + ' edges' : '-'}</span>
+      <span class="duration">${fmtDuration(r.durationMs)}</span>
+    </div>`
+  }).join('')
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+// ── Init ─────────────────────────────────────────
+loadData()
+</script>
+</body>
+</html>
