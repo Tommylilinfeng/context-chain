@@ -73,14 +73,7 @@ MCPEOF
 - 默认返回摘要列表，传 `detail=true` 获取完整内容
 - 传 `decision_id` 展开单条决策的关系链
 
-### 其他工具
-- `search_decisions_by_keyword` — 按关键词搜索决策
-- `search_decisions_semantic` — 语义搜索（需要向量库）
-- `get_decision_relationships` — 查因果/依赖/冲突关系链
-
-### 反馈
-完成任务后，调用 `report_context_usage(used_ids=[...])` 报告实际参考了哪些决策 ID。
-这帮助系统优化未来的检索排序。
+`get_context_for_code` 内部融合了锚点、关键词、关系链、向量四通道检索，是唯一需要的工具。
 CLAUDEEOF
     echo "  ✓ CLAUDE.md CKG 段落已添加"
   fi

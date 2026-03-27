@@ -127,18 +127,9 @@ npm run analyze -- --repo my-repo --continue                  # resume interrupt
 
 Configuration dimensions: context depth (caller/callee hops), code granularity (full/truncated/signature), output control (finding types, max decisions, language), prompt templates, AI provider.
 
-### MCP Server — 9 tools
+### MCP Server
 
-| Tool | What it does |
-|------|-------------|
-| `get_context_for_code` | Five-slot retrieval — the main entry point |
-| `search_decisions_by_keyword` | Keyword search with inverted index |
-| `search_decisions_semantic` | Vector similarity search |
-| `get_decision_relationships` | Explore causal/dependency/conflict chains |
-| `get_code_structure` | List functions in a file/service |
-| `get_callers` / `get_callees` | Upstream/downstream dependencies |
-| `get_cross_repo_dependencies` | Cross-service API dependencies |
-| `report_context_usage` | Feedback: which decisions were actually useful |
+Single tool: `get_context_for_code` — five-channel fused retrieval (anchor, keyword, relationship, vector). Supports summary/detail modes and single-decision expansion with relationship chains.
 
 ### Dashboard
 
