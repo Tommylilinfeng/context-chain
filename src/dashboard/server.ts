@@ -711,7 +711,7 @@ app.post('/api/coverage/analyze-function', async (c) => {
     })
     fnRecord.durationMs = Date.now() - fnStartTime
     fnRecord.completedAt = new Date().toISOString()
-    fnRecord.totalTokens = fnInput + fnCacheCreate + fnCacheRead + fnOutput
+    fnRecord.totalTokens = fnInput + fnOutput
     appendRunRecord(fnRecord)
 
     return c.json({
@@ -2016,7 +2016,7 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
         })
         fnRecord.durationMs = result.metadata.duration_ms
         fnRecord.completedAt = new Date().toISOString()
-        fnRecord.totalTokens = fnInput + fnCacheCreate + fnCacheRead + fnOutput
+        fnRecord.totalTokens = fnInput + fnOutput
         appendRunRecord(fnRecord)
 
         // Only mark as analyzed on success — errors will be retried on next run

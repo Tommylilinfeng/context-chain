@@ -128,8 +128,8 @@ export function createRunRecord(type: RunType, opts?: Partial<RunRecord>): RunRe
 export function finalizeAndSave(record: RunRecord): void {
   record.completedAt = new Date().toISOString()
   record.durationMs = new Date(record.completedAt).getTime() - new Date(record.startedAt).getTime()
-  // Total = non-cached input + cache write + cache read + output
-  record.totalTokens = record.inputTokens + (record.cacheCreationTokens ?? 0) + (record.cacheReadTokens ?? 0) + record.outputTokens
+  // Total = our input + output only (excludes system prompt cache overhead)
+  record.totalTokens = record.inputTokens + record.outputTokens
   appendRunRecord(record)
 }
 
