@@ -110,7 +110,7 @@
 .run-list { padding: 0 40px 40px; }
 .run-list h3 { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
 .run-item {
-  display: grid; grid-template-columns: 100px 110px 90px 1fr 90px 70px 80px 70px;
+  display: grid; grid-template-columns: 100px 110px 90px 1fr 80px 80px 70px 80px 70px;
   gap: 8px; align-items: center;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-subtle);
@@ -204,7 +204,7 @@
   <div class="run-list">
     <h3>Recent Runs</h3>
     <div class="run-item" style="font-weight:600;color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:0.5px">
-      <span>Time</span><span>Type</span><span>Template</span><span>Function</span><span>Tokens</span><span>Cache</span><span>Decisions</span><span>Duration</span>
+      <span>Time</span><span>Type</span><span>Template</span><span>Function</span><span>Input</span><span>Output</span><span>Cache</span><span>Decisions</span><span>Duration</span>
     </div>
     <div id="runList"></div>
   </div>
@@ -423,9 +423,23 @@ function renderTemplateTable(data) {
 }
 
 function cacheRate(r) {
-  var total = (r.inputTokens || 0) + (r.cacheCreationTokens || 0) + (r.cacheReadTokens || 0)
-  if (total <= 0 || !r.cacheReadTokens) return '-'
-  return Math.round(r.cacheReadTokens / total * 100) + '%'
+  // CLI provider: cache is entirely CLI system prompt, not our content — don't show
+  if (!r.provider || r.provider === 'claude-cli' || r.provider === 'codex-cli') return '-'
+  // API provider: cache_read reflects our prompt prefix caching
+  var ourInput = (r.inputTokens || 0) + (r.cacheCreationTokens || 0) + (r.cacheReadTokens || 0)
+  if (ourInput <= 0 || !r.cacheReadTokens) return '-'
+  return Math.round(r.cacheReadTokens / ourInput * 100) + '%'
+}
+
+function promptTokens(r) {
+  // Total prompt tokens sent to the model (excluding CLI system prompt overhead)
+  // For API: inputTokens + cacheCreation + cacheRead = full prompt
+  // For CLI: cacheCreation ≈ our prompt (system prompt is in cacheRead, not ours)
+  if (r.provider === 'anthropic-api') {
+    return (r.inputTokens || 0) + (r.cacheCreationTokens || 0) + (r.cacheReadTokens || 0)
+  }
+  // CLI: cacheCreation is our prompt content; inputTokens is residual (~2 tokens)
+  return (r.cacheCreationTokens || 0) + (r.inputTokens || 0)
 }
 
 function renderRunList(runs) {
@@ -441,12 +455,14 @@ function renderRunList(runs) {
     const tmpl = r.template || '-'
     const fnLabel = r.functionName ? (r.filePath ? r.filePath + '::' : '') + r.functionName : (r.sessionId ? 'session:' + r.sessionId.slice(0, 8) : r.repo || '-')
     const cache = cacheRate(r)
+    const input = promptTokens(r)
     return `<div class="run-item">
       <span class="time">${fmtTime(r.startedAt)}</span>
       <span><span class="type-badge ${typeClass}">${r.type}</span></span>
       <span class="meta">${esc(tmpl)}</span>
       <span class="meta">${esc(fnLabel)}</span>
-      <span class="tokens">${fmtTokens(r.totalTokens)}</span>
+      <span class="tokens">${input > 0 ? fmtTokens(input) : '-'}</span>
+      <span class="tokens">${fmtTokens(r.outputTokens || 0)}</span>
       <span class="tokens" style="color:${cache !== '-' ? 'var(--green)' : 'var(--text-dim)'}">${cache}</span>
       <span class="decisions">${r.decisionsCreated > 0 ? '+' + r.decisionsCreated : r.edgesCreated > 0 ? r.edgesCreated + ' edges' : '-'}</span>
       <span class="duration">${fmtDuration(r.durationMs)}</span>

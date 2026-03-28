@@ -701,6 +701,7 @@ app.post('/api/coverage/analyze-function', async (c) => {
     const fnRecord = createRunRecord('analyze', {
       repo, template: templateName,
       model: config.ai?.model,
+      provider: config.ai?.provider,
       functionName, filePath,
       inputTokens: fnInput,
       outputTokens: fnOutput,
@@ -1918,6 +1919,7 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       repo,
       template: templateName,
       model: config.ai?.model,
+      provider: config.ai?.provider,
     })
 
     pushLog(runJob.logs, `Starting analysis: ${remaining.length} functions (${analyzedSet.size} skipped)`)
@@ -2004,6 +2006,7 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           repo,
           template: templateName,
           model: historyRecord.model,
+          provider: historyRecord.provider,
           functionName: fn.name,
           filePath: fn.filePath,
           batchId: historyRecord.id,
@@ -2241,7 +2244,7 @@ app.post('/api/group/start', async (c) => {
   if (grpAiErr) return c.json({ error: grpAiErr }, 400)
 
   const body = await c.req.json()
-  const { mode = 'summary', batchSize = 50 } = body
+  const { mode = 'summary', batchSize = 100 } = body
 
   // Reset job
   groupJob.status = 'running'
@@ -2262,6 +2265,7 @@ app.post('/api/group/start', async (c) => {
       // Run history tracking for connect/grouping
       const historyRecord = createRunRecord('connect', {
         model: config.ai?.model,
+        provider: config.ai?.provider,
         template: mode,
       })
 
@@ -2795,6 +2799,7 @@ app.post('/api/sessions/:id/analyze', async (c) => {
         sessionId: session.id,
         repo: session.project,
         model: config.ai?.model,
+        provider: config.ai?.provider,
         template: 'session-ingestion',
       })
 

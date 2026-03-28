@@ -82,50 +82,66 @@ const RELATIONSHIP_TYPES = ['CAUSED_BY', 'DEPENDS_ON', 'CONFLICTS_WITH', 'CO_DEC
 // ── Batch Plan ──────────────────────────────────────────
 
 export interface BatchPlan {
-  optimalK: number
-  oldPerBatch: number
-  totalBatches: number
-  newDecisions: number
-  oldDecisions: number
+  /** Anchor decisions per pass — fixed for KV cache hits */
+  anchorSize: number
+  /** Rotating decisions per round */
+  rotateSize: number
+  /** Total LLM grouping rounds across all passes */
+  totalRounds: number
+  /** Number of passes (each pass retires one anchor set) */
+  totalPasses: number
+  /** Total decisions in pool */
+  poolSize: number
   batchSize: number
+  /** Whether plan detected incremental mode */
+  incremental: boolean
 }
 
 /**
- * Compute optimal batch composition for decision grouping.
+ * Compute batch plan for anchor/rotate KV-cache strategy.
  *
- * @param M - number of already-compared (old) decisions
- * @param K - number of new (uncompared) decisions
+ * Each pass: fix anchor decisions, rotate remaining through in chunks.
+ * After a pass, anchor decisions are fully compared → removed from pool.
+ * Repeat until pool exhausted.
+ *
+ * In incremental mode (anchorOverride provided), the anchor is the small set
+ * of changed decisions — often just 1 pass is needed.
+ *
+ * @param N - total decisions needing comparison (with PENDING edges)
  * @param B - batch capacity (decisions per batch)
+ * @param anchorOverride - explicit anchor size (for incremental mode); omit for default B/2
  */
-export function computeBatchPlan(M: number, K: number, B: number): BatchPlan {
-  if (K === 0 || B < 2) {
-    return { optimalK: 0, oldPerBatch: B, totalBatches: 0, newDecisions: K, oldDecisions: M, batchSize: B }
+export function computeBatchPlan(N: number, B: number, anchorOverride?: number): BatchPlan {
+  if (N < 2 || B < 2) {
+    return { anchorSize: 0, rotateSize: 0, totalRounds: 0, totalPasses: 0, poolSize: N, batchSize: B, incremental: false }
   }
 
-  // Special case: no old decisions — just batch all new decisions together
-  if (M === 0) {
-    const batches = Math.ceil(K / B)
-    return { optimalK: Math.min(K, B), oldPerBatch: 0, totalBatches: batches, newDecisions: K, oldDecisions: 0, batchSize: B }
+  const incremental = anchorOverride !== undefined && anchorOverride < Math.floor(B / 2)
+  const anchorSize = anchorOverride ?? Math.floor(B / 2)
+  const rotateSize = B - anchorSize
+
+  let totalRounds = 0
+  let totalPasses = 0
+  let P = N
+
+  while (P >= 2) {
+    // For incremental first pass, use the override; subsequent passes use B/2
+    const a = totalPasses === 0
+      ? Math.min(anchorSize, P)
+      : Math.min(Math.floor(B / 2), P)
+    const r = totalPasses === 0 ? rotateSize : B - a
+    const remaining = P - a
+    if (remaining === 0) {
+      totalRounds += 1
+      totalPasses += 1
+      break
+    }
+    totalRounds += Math.ceil(remaining / r)
+    totalPasses += 1
+    P = remaining
   }
 
-  let bestK = 1
-  let bestT = Infinity
-
-  for (let k = 1; k <= Math.min(K, B - 1); k++) {
-    const rounds = Math.ceil(M / (B - k))
-    const groups = Math.ceil(K / k)
-    const T = rounds * groups
-    if (T < bestT) { bestT = T; bestK = k }
-  }
-
-  return {
-    optimalK: bestK,
-    oldPerBatch: B - bestK,
-    totalBatches: bestT,
-    newDecisions: K,
-    oldDecisions: M,
-    batchSize: B,
-  }
+  return { anchorSize, rotateSize, totalRounds, totalPasses, poolSize: N, batchSize: B, incremental }
 }
 
 // ── createPendingEdges ──────────────────────────────────
@@ -226,13 +242,14 @@ export async function invalidateDecisionEdges(
 // ── connectDecisions（核心）──────────────────────────────
 
 /**
- * Process all PENDING_COMPARISON edges.
+ * Process all PENDING_COMPARISON edges using anchor/rotate KV-cache strategy.
  *
- * 1. Find all decisions involved in PENDING edges
- * 2. Split into batches by batchCapacity
- * 3. Each batch: LLM grouping → per-group LLM relationship → write edges
- * 4. Delete all PENDING edges in batch (regardless of result)
- * 5. Iterate until no PENDING edges remain or budget exhausted
+ * Each pass:
+ *   1. Select anchor (B/2 decisions) — fixed across all rounds for KV cache hits
+ *   2. Rotate remaining decisions through in chunks of B/2
+ *   3. Each round: LLM grouping → per-group LLM relationship → write edges → delete PENDING
+ *   4. After all remaining are rotated, anchor is fully compared → removed from pool
+ *   5. Repeat with shrunk pool until done
  */
 export async function connectDecisions(
   opts: ConnectDecisionsOptions
@@ -241,7 +258,7 @@ export async function connectDecisions(
     dbSession: session,
     ai,
     budget = null,
-    batchCapacity = 50,
+    batchCapacity = 100,
     concurrency = 2,
     verbose = true,
     onBatchProgress,
@@ -250,198 +267,101 @@ export async function connectDecisions(
     mode = 'content',
   } = opts
 
-  if (verbose) console.log('\n🔗 Connecting decisions...')
+  if (verbose) console.log('\n🔗 Connecting decisions (anchor/rotate cache strategy)...')
 
   let totalPendingProcessed = 0
   let totalEdgesCreated = 0
   let batchesRun = 0
+  let passIndex = 0
 
-  // Iterate through PENDING edges
+  // Outer loop: each pass selects a new anchor set
   while (true) {
-    // Check abort signal
     if (abortSignal?.aborted) {
       if (verbose) console.log(`  ⏹️ Abort requested, stopping`)
       break
     }
-
-    // Check budget
     if (budget?.exceeded) {
       if (verbose) console.log(`  ⚠️ Budget exhausted, stopping`)
       break
     }
 
-    // 1. Find decision IDs with PENDING edges
-    if (verbose) console.log(`\n  🔍 Looking for decisions with PENDING edges (limit ${batchCapacity})...`)
-    const pendingDecisionIds = await getPendingDecisionIds(session, batchCapacity)
-    if (verbose) console.log(`  🔍 Found ${pendingDecisionIds.length} decision(s)`)
-
-    if (pendingDecisionIds.length < 2) {
-      if (verbose) console.log(`  ○ No PENDING edges to process (need ≥ 2, got ${pendingDecisionIds.length})`)
+    // Get all decisions with PENDING edges, sorted by count desc
+    const poolInfo = await getPendingDecisionsSorted(session)
+    if (poolInfo.length < 2) {
+      if (verbose) console.log(`  ○ No PENDING edges to process (pool size: ${poolInfo.length})`)
       break
     }
 
+    // Detect anchor size: incremental (small changed set) vs full (B/2)
+    const detection = detectAnchorSize(poolInfo, batchCapacity)
+    const effectiveAnchorSize = detection.anchorSize
+    const rotateSize = batchCapacity - effectiveAnchorSize
+
+    // Split: anchor (fixed for cache) + rest (to rotate through)
+    const anchor = poolInfo.slice(0, effectiveAnchorSize).map(p => p.id)
+    const rest = poolInfo.slice(effectiveAnchorSize).map(p => p.id)
+
+    passIndex++
     if (verbose) {
       const pendingCount = await countPendingEdges(session)
-      console.log(`\n  📦 Batch ${batchesRun + 1}: ${pendingDecisionIds.length}  decisions (${pendingCount}  PENDING edges remaining)`)
+      const modeLabel = detection.mode === 'incremental'
+        ? `incremental (${anchor.length} changed)`
+        : `full (B/2=${effectiveAnchorSize})`
+      console.log(`\n  🔄 Pass ${passIndex} [${modeLabel}]: anchor=${anchor.length}, remaining=${rest.length}, pool=${poolInfo.length} (${pendingCount} PENDING edges)`)
     }
 
-    // 2. Load decision details
-    const decisions = await getDecisionRecords(session, pendingDecisionIds)
-    if (decisions.length < 2) break
-
-    // 3. Get CPG hints
-    const cpgHints = await getCPGHints(session, decisions)
-    if (cpgHints.length > 0 && verbose) {
-      console.log(`    📁 ${cpgHints.length}  CPG call hints loaded`)
-    }
-
-    // 4. LLM grouping
-    const summaries: DecisionSummaryForGrouping[] = decisions.map(d => ({
-      id: d.id,
-      function: d.functionName,
-      file: d.filePath,
-      summary: d.summary,
-      keywords: d.keywords,
-    }))
-
-    let groups: { group: string[]; reason: string }[] = []
-    try {
-      const groupPrompt = buildGroupingPrompt(summaries, cpgHints)
-      const rawGroups = await ai.call(groupPrompt)
-      if (budget) budget.record(ai.lastUsage)
-      groups = parseJsonSafe<{ group: string[]; reason: string }[]>(rawGroups, [])
-      if (!Array.isArray(groups)) groups = []
-
-      if (verbose && groups.length > 0) {
-        console.log(`    ✓ ${groups.length}  related decision groups`)
-        for (const g of groups) {
-          console.log(`      • [${g.group.length} ] ${g.reason}`)
-        }
-      }
-    } catch (err: any) {
-      if (verbose) console.log(`    ⚠️ Grouping failed: ${err.message}`)
-    }
-
-    // Check abort after grouping LLM call
-    if (abortSignal?.aborted) {
-      // Still delete PENDING edges for this batch to avoid re-processing
-      await deletePendingEdgesAmong(session, pendingDecisionIds)
+    // If all fit in one batch, just process together
+    if (rest.length === 0) {
+      const result = await processOneBatch({
+        session, ai, budget, concurrency, verbose, mode,
+        batchIds: anchor, batchesRun, onBatchProgress, onGroupDone, abortSignal,
+      })
+      totalPendingProcessed += result.pendingDeleted
+      totalEdgesCreated += result.edgesCreated
       batchesRun++
-      if (verbose) console.log(`  ⏹️ Abort after grouping, skipping deep analysis`)
       break
     }
 
-    // 5. Per-group LLM deep analysis
-    let batchEdges = 0
-
-    if (groups.length > 0) {
-      const groupResults = await runWithConcurrency(
-        groups,
-        concurrency,
-        async (group) => {
-          if (budget?.exceeded || abortSignal?.aborted) return []
-
-          // Build decision content (summary mode uses summary as content for speed)
-          const groupDecisions: DecisionFullContent[] = []
-          for (const id of group.group) {
-            const d = decisions.find(dd => dd.id === id)
-            if (d) {
-              groupDecisions.push({
-                id: d.id,
-                function: d.functionName,
-                file: d.filePath,
-                summary: d.summary,
-                content: mode === 'summary' ? d.summary : d.content,
-                keywords: d.keywords,
-              })
-            }
-          }
-          if (groupDecisions.length < 2) return []
-
-          try {
-            const relPrompt = buildRelationshipPrompt(groupDecisions, group.reason)
-            if (verbose) console.log(`      → Analyzing group [${groupDecisions.length}]: ${group.reason.slice(0, 80)}`)
-            const rawRel = await ai.call(relPrompt)
-            if (budget) budget.record(ai.lastUsage)
-            const result = parseJsonSafe<{ edges: any[] }>(rawRel, { edges: [] })
-            const edges = Array.isArray(result.edges) ? result.edges : []
-            if (verbose) console.log(`        ${edges.length} edge(s) found`)
-            if (onGroupDone) {
-              onGroupDone({
-                batchIndex: batchesRun,
-                groupIndex: groups.indexOf(group),
-                totalGroups: groups.length,
-                edgesFound: edges.length,
-                reason: group.reason.slice(0, 120),
-              })
-            }
-            return edges
-          } catch (err: any) {
-            if (verbose) console.log(`    ⚠️ Group analysis failed: ${err.message}`)
-            return []
-          }
-        }
-      )
-
-      // Write relationship edges
-      for (const edges of groupResults) {
-        for (const edge of edges) {
-          const edgeType = String(edge.type).toUpperCase()
-          if (!RELATIONSHIP_TYPES.includes(edgeType as any)) {
-            if (verbose) console.log(`      ⚠️ Skipping unknown edge type: ${edgeType}`)
-            continue
-          }
-          if (!edge.from || !edge.to) continue
-
-          try {
-            await session.run(
-              `MATCH (a:DecisionContext {id: $from})
-               MATCH (b:DecisionContext {id: $to})
-               MERGE (a)-[r:${edgeType}]->(b)
-               SET r.reason = $reason, r.created_at = $now`,
-              {
-                from: edge.from,
-                to: edge.to,
-                reason: String(edge.reason ?? ''),
-                now: new Date().toISOString(),
-              }
-            )
-            batchEdges++
-          } catch (err: any) {
-            if (verbose) console.log(`      ⚠️ Edge write failed (${edge.from} → ${edge.to}): ${err.message}`)
-          }
-        }
+    // Inner loop: rotate rest through in chunks, anchor stays fixed
+    for (let i = 0; i < rest.length; i += rotateSize) {
+      if (abortSignal?.aborted) {
+        if (verbose) console.log(`  ⏹️ Abort requested mid-pass`)
+        break
       }
+      if (budget?.exceeded) {
+        if (verbose) console.log(`  ⚠️ Budget exhausted mid-pass`)
+        break
+      }
+
+      const chunk = rest.slice(i, i + rotateSize)
+      const batchIds = [...anchor, ...chunk]
+
+      if (verbose) {
+        const roundInPass = Math.floor(i / rotateSize) + 1
+        const totalRoundsInPass = Math.ceil(rest.length / rotateSize)
+        console.log(`\n  📦 Pass ${passIndex} Round ${roundInPass}/${totalRoundsInPass}: ${anchor.length} anchor + ${chunk.length} rotate = ${batchIds.length} decisions`)
+      }
+
+      const result = await processOneBatch({
+        session, ai, budget, concurrency, verbose, mode,
+        batchIds, batchesRun, onBatchProgress, onGroupDone, abortSignal,
+      })
+      totalPendingProcessed += result.pendingDeleted
+      totalEdgesCreated += result.edgesCreated
+      batchesRun++
     }
 
-    // 6. 删除 batch 内所有 PENDING_COMPARISON 边
-    //    Delete all — relationships have own edges, deleted PENDING means "already compared"
-    const pendingDeleted = await deletePendingEdgesAmong(session, pendingDecisionIds)
-
-    totalPendingProcessed += pendingDeleted
-    totalEdgesCreated += batchEdges
-    batchesRun++
+    // Anchor is now fully compared with all others.
+    // Delete any remaining PENDING edges among anchor (should be covered, but be safe).
+    await deletePendingEdgesAmong(session, anchor)
 
     if (verbose) {
-      console.log(`    📝 ${batchEdges}  relationship edges, ${pendingDeleted}  PENDING edges processed`)
-    }
-
-    // Fire progress callback
-    if (onBatchProgress) {
-      const remaining = await countPendingEdges(session)
-      onBatchProgress({
-        batchIndex: batchesRun - 1,
-        status: 'done',
-        decisionsInBatch: pendingDecisionIds.length,
-        groupsFound: groups.length,
-        edgesCreated: batchEdges,
-        pendingRemaining: remaining,
-      })
+      console.log(`  ✓ Pass ${passIndex} done: anchor ${anchor.length} decisions retired from pool`)
     }
   }
 
   if (verbose && batchesRun > 0) {
-    console.log(`\n  ✅ Connection complete: ${batchesRun}  batches, ${totalEdgesCreated}  relationship edges, ${totalPendingProcessed}  PENDING processed`)
+    console.log(`\n  ✅ Connection complete: ${passIndex} passes, ${batchesRun} rounds, ${totalEdgesCreated} relationship edges, ${totalPendingProcessed} PENDING processed`)
   }
 
   return {
@@ -451,30 +371,242 @@ export async function connectDecisions(
   }
 }
 
+// ── processOneBatch (extracted for anchor/rotate reuse) ──
+
+interface ProcessBatchOpts {
+  session: Session
+  ai: AIProvider
+  budget: BudgetManager | null
+  concurrency: number
+  verbose: boolean
+  mode: 'summary' | 'content'
+  batchIds: string[]
+  batchesRun: number
+  onBatchProgress?: ConnectDecisionsOptions['onBatchProgress']
+  onGroupDone?: ConnectDecisionsOptions['onGroupDone']
+  abortSignal?: { aborted: boolean }
+}
+
+async function processOneBatch(opts: ProcessBatchOpts): Promise<{ edgesCreated: number; pendingDeleted: number }> {
+  const { session, ai, budget, concurrency, verbose, mode, batchIds, batchesRun, onBatchProgress, onGroupDone, abortSignal } = opts
+
+  // Load decision details
+  const decisions = await getDecisionRecords(session, batchIds)
+  if (decisions.length < 2) return { edgesCreated: 0, pendingDeleted: 0 }
+
+  // Get CPG hints
+  const cpgHints = await getCPGHints(session, decisions)
+  if (cpgHints.length > 0 && verbose) {
+    console.log(`    📁 ${cpgHints.length} CPG call hints loaded`)
+  }
+
+  // LLM grouping
+  const summaries: DecisionSummaryForGrouping[] = decisions.map(d => ({
+    id: d.id,
+    function: d.functionName,
+    file: d.filePath,
+    summary: d.summary,
+    keywords: d.keywords,
+  }))
+
+  let groups: { group: string[]; reason: string }[] = []
+  try {
+    const groupPrompt = buildGroupingPrompt(summaries, cpgHints)
+    const rawGroups = await ai.call(groupPrompt)
+    if (budget) budget.record(ai.lastUsage)
+    groups = parseJsonSafe<{ group: string[]; reason: string }[]>(rawGroups, [])
+    if (!Array.isArray(groups)) groups = []
+
+    if (verbose && groups.length > 0) {
+      console.log(`    ✓ ${groups.length} related decision groups`)
+      for (const g of groups) {
+        console.log(`      • [${g.group.length}] ${g.reason}`)
+      }
+    }
+  } catch (err: any) {
+    if (verbose) console.log(`    ⚠️ Grouping failed: ${err.message}`)
+  }
+
+  // Check abort after grouping LLM call
+  if (abortSignal?.aborted) {
+    const pendingDeleted = await deletePendingEdgesAmong(session, batchIds)
+    if (verbose) console.log(`  ⏹️ Abort after grouping, skipping deep analysis`)
+    return { edgesCreated: 0, pendingDeleted }
+  }
+
+  // Per-group LLM deep analysis
+  let batchEdges = 0
+
+  if (groups.length > 0) {
+    const groupResults = await runWithConcurrency(
+      groups,
+      concurrency,
+      async (group) => {
+        if (budget?.exceeded || abortSignal?.aborted) return []
+
+        const groupDecisions: DecisionFullContent[] = []
+        for (const id of group.group) {
+          const d = decisions.find(dd => dd.id === id)
+          if (d) {
+            groupDecisions.push({
+              id: d.id,
+              function: d.functionName,
+              file: d.filePath,
+              summary: d.summary,
+              content: mode === 'summary' ? d.summary : d.content,
+              keywords: d.keywords,
+            })
+          }
+        }
+        if (groupDecisions.length < 2) return []
+
+        try {
+          const relPrompt = buildRelationshipPrompt(groupDecisions, group.reason)
+          if (verbose) console.log(`      → Analyzing group [${groupDecisions.length}]: ${group.reason.slice(0, 80)}`)
+          const rawRel = await ai.call(relPrompt)
+          if (budget) budget.record(ai.lastUsage)
+          const result = parseJsonSafe<{ edges: any[] }>(rawRel, { edges: [] })
+          const edges = Array.isArray(result.edges) ? result.edges : []
+          if (verbose) console.log(`        ${edges.length} edge(s) found`)
+          if (onGroupDone) {
+            onGroupDone({
+              batchIndex: batchesRun,
+              groupIndex: groups.indexOf(group),
+              totalGroups: groups.length,
+              edgesFound: edges.length,
+              reason: group.reason.slice(0, 120),
+            })
+          }
+          return edges
+        } catch (err: any) {
+          if (verbose) console.log(`    ⚠️ Group analysis failed: ${err.message}`)
+          return []
+        }
+      }
+    )
+
+    // Write relationship edges
+    for (const edges of groupResults) {
+      for (const edge of edges) {
+        const edgeType = String(edge.type).toUpperCase()
+        if (!RELATIONSHIP_TYPES.includes(edgeType as any)) {
+          if (verbose) console.log(`      ⚠️ Skipping unknown edge type: ${edgeType}`)
+          continue
+        }
+        if (!edge.from || !edge.to) continue
+
+        try {
+          await session.run(
+            `MATCH (a:DecisionContext {id: $from})
+               MATCH (b:DecisionContext {id: $to})
+               MERGE (a)-[r:${edgeType}]->(b)
+               SET r.reason = $reason, r.created_at = $now`,
+            {
+              from: edge.from,
+              to: edge.to,
+              reason: String(edge.reason ?? ''),
+              now: new Date().toISOString(),
+            }
+          )
+          batchEdges++
+        } catch (err: any) {
+          if (verbose) console.log(`      ⚠️ Edge write failed (${edge.from} → ${edge.to}): ${err.message}`)
+        }
+      }
+    }
+  }
+
+  // Delete PENDING edges among batch members
+  const pendingDeleted = await deletePendingEdgesAmong(session, batchIds)
+
+  if (verbose) {
+    console.log(`    📝 ${batchEdges} relationship edges, ${pendingDeleted} PENDING edges processed`)
+  }
+
+  // Fire progress callback
+  if (onBatchProgress) {
+    const remaining = await countPendingEdges(session)
+    onBatchProgress({
+      batchIndex: batchesRun,
+      status: 'done',
+      decisionsInBatch: batchIds.length,
+      groupsFound: groups.length,
+      edgesCreated: batchEdges,
+      pendingRemaining: remaining,
+    })
+  }
+
+  return { edgesCreated: batchEdges, pendingDeleted }
+}
+
 // ── Internal Helpers ────────────────────────────────────
 
+interface PendingDecisionInfo {
+  id: string
+  pendingCount: number
+}
+
 /**
- * Get decision IDs with PENDING edges, up to limit.
- * Prioritize decisions with the most PENDING edges.
+ * Get ALL decisions with PENDING edges, sorted by PENDING count descending.
+ * High-count decisions are natural anchors (incremental: the changed set).
  */
-async function getPendingDecisionIds(session: Session, limit: number): Promise<string[]> {
+async function getPendingDecisionsSorted(session: Session): Promise<PendingDecisionInfo[]> {
   try {
-    const safeLimit = Math.max(1, Math.floor(limit))
-    // Simple query — Memgraph has issues with WITH+count+ORDER BY+LIMIT combo
     const result = await session.run(
-      `MATCH (d:DecisionContext)-[:PENDING_COMPARISON]-()
-       RETURN DISTINCT d.id AS id
-       LIMIT ${safeLimit}`
+      `MATCH (d:DecisionContext)-[r:PENDING_COMPARISON]-()
+       RETURN d.id AS id, count(r) AS cnt
+       ORDER BY cnt DESC`
     )
-    const ids = result.records.map(r => r.get('id') as string)
-    if (ids.length === 0) {
-      console.log('  [debug] getPendingDecisionIds: 0 results')
+    const items = result.records.map(r => ({
+      id: r.get('id') as string,
+      pendingCount: toNum(r.get('cnt')),
+    }))
+    if (items.length === 0) {
+      console.log('  [debug] getPendingDecisionsSorted: 0 results')
     }
-    return ids
+    return items
   } catch (err: any) {
-    console.error('getPendingDecisionIds error:', err.message)
+    console.error('getPendingDecisionsSorted error:', err.message)
     return []
   }
+}
+
+/**
+ * Detect anchor size from PENDING count distribution.
+ *
+ * Incremental case: K changed decisions have count ≈ N, the rest have count ≈ K.
+ *   → anchor = the K high-count decisions (often << B/2), rotate = B - K per round.
+ *
+ * Full case: all decisions have similar counts.
+ *   → anchor = B/2 (default split).
+ */
+function detectAnchorSize(pool: PendingDecisionInfo[], batchCapacity: number): { anchorSize: number; mode: 'incremental' | 'full' } {
+  const defaultAnchor = Math.floor(batchCapacity / 2)
+
+  if (pool.length <= batchCapacity) {
+    // Everything fits in one batch, anchor = all
+    return { anchorSize: pool.length, mode: 'full' }
+  }
+
+  const maxCount = pool[0].pendingCount
+  const minCount = pool[pool.length - 1].pendingCount
+
+  // If top count is >3× bottom count, there's an incremental cluster
+  if (maxCount > 3 * minCount && minCount > 0) {
+    const threshold = (maxCount + minCount) / 2
+    let clusterSize = 0
+    for (const p of pool) {
+      if (p.pendingCount >= threshold) clusterSize++
+      else break // sorted desc, so we can break early
+    }
+    // Only use incremental mode if cluster is smaller than default anchor
+    // (otherwise B/2 is already good enough)
+    if (clusterSize > 0 && clusterSize < defaultAnchor) {
+      return { anchorSize: clusterSize, mode: 'incremental' }
+    }
+  }
+
+  return { anchorSize: defaultAnchor, mode: 'full' }
 }
 
 /** Total PENDING edge count (for logging) */

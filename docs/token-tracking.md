@@ -68,28 +68,27 @@ cat prompt.txt | claude -p --tools "" --output-format json
 The CLI wraps our prompt in its own request structure:
 
 ```
-[Claude Code system prompt ~6,000 tokens]    ← injected by CLI, not our content
-[Our user message prompt]                     ← our analysis instructions + function code
+[Claude Code system prompt + project context ~11,000 tokens]  ← injected by CLI, not our content
+[Our user message prompt]                                      ← our analysis instructions + function code
 ```
 
 **Token accounting:**
 - `input_tokens` — non-cached input (typically 2-3 tokens, almost everything goes to cache)
 - `output_tokens` — model response
-- `cache_creation_input_tokens` — includes Claude Code system prompt + our prompt (~6,000-7,000 tokens)
-- `cache_read_input_tokens` — typically 0 for analysis (see below)
+- `cache_creation_input_tokens` — our prompt content (~300-5,000 tokens depending on function size)
+- `cache_read_input_tokens` — CLI system prompt + project context (~11,000 tokens, constant)
 
-**Cache behavior:**
-- Claude Code automatically caches its own system prompt block
-- The CLI does **not** place `cache_control` breakpoints on the user message
-- System prompt cache **does** hit across `claude -p` invocations (verified: `cache_read=6150`)
-- User message prefix cache does **not** work — even with identical prefixes, the CLI only caches at the message-block level, not token-prefix level
+**Cache behavior (verified 2026-03-27):**
+- CLI automatically caches its system prompt + project context (CLAUDE.md etc.) as one block (~11,367 tokens)
+- This `cache_read` is **constant** across all `claude -p` invocations regardless of user message content
+- Our user message goes to `cache_creation` (cached with 1h TTL per message block)
+- User message prefix caching does **not** work — the CLI caches complete message blocks, not token prefixes within a message
+- Only an **identical** user message hits cache (verified: same prompt → `cache_creation=0, cache_read=16102`)
 - Each `claude -p` invocation creates a new session ID, but this does not prevent system prompt cache hits
 
-**Why cache_read is usually 0 for analysis:**
+**Why the dashboard doesn't show cache rate for CLI:**
 
-Each function analysis has a unique user message (different function code, callers, callees). Since the CLI only caches complete message blocks — not token prefixes within a message — the user message never hits cache. Only the system prompt block can be cached, and it shows up as `cache_creation` on the first call (creating the cache entry) but as `cache_read` on identical subsequent calls.
-
-In batch analysis with `concurrency >= 2`, parallel calls may each create their own cache entry for the system prompt, resulting in `cache_creation` on every call and `cache_read = 0`.
+The `cache_read` reported by CLI is entirely the system prompt overhead (~11,000 tokens) — not our content. Showing it as "cache hit rate" is misleading because it reflects CLI internals, not our prompt caching strategy. For CLI runs, the dashboard shows `-` in the cache column.
 
 ## Prompt Structure for Cache Optimization
 
@@ -121,9 +120,15 @@ For `claude-cli`, this structure has no cache benefit (the CLI doesn't support u
 
 The History page (`/history`) shows:
 
-- **Total Tokens** — sum of `totalTokens` (input + output only)
-- **Avg Tokens / Analysis** — average `totalTokens` for `type=analyze` records
-- **Cache Hit Rate** — `cacheReadTokens / (cacheReadTokens + cacheCreationTokens + inputTokens)`, only shown when cache reads exist
-- **Per-run cache column** — individual cache hit % per row
+- **Input** — prompt tokens sent to the model (excludes CLI system prompt overhead)
+  - CLI: `cache_creation_input_tokens + input_tokens` (our prompt content only)
+  - API: `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` (full prompt)
+- **Output** — model response tokens
+- **Cache** — prompt cache hit rate (API provider only)
+  - `cache_read / (input + cache_creation + cache_read)`, computed from our content only
+  - CLI runs show `-` because `cache_read` reflects CLI system prompt, not our content
+- **Decisions** — decisions created or edges found per run
 
 `analyze-batch` records (batch summaries) are excluded from all stats to avoid double-counting with individual `analyze` records.
+
+Each `RunRecord` includes a `provider` field (`claude-cli`, `anthropic-api`, `codex-cli`) so the dashboard can apply provider-specific display logic.

@@ -44,6 +44,7 @@ export interface RunRecord {
   repo?: string
   template?: string           // prompt template used
   model?: string              // AI model used
+  provider?: string           // 'claude-cli' | 'anthropic-api' | 'codex-cli'
   sessionId?: string          // for session-ingest runs
   goal?: string
 

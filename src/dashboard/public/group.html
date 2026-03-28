@@ -146,11 +146,11 @@
       <div class="batch-config">
         <div class="section-title">Batch Size</div>
         <div class="slider-row">
-          <input type="range" id="batchSlider" min="10" max="100" step="5" value="50">
-          <span class="slider-value" id="batchValue">50</span>
+          <input type="range" id="batchSlider" min="10" max="200" step="10" value="100">
+          <span class="slider-value" id="batchValue">100</span>
         </div>
         <div style="font-size:11px;color:var(--text-dim);">
-          Decisions per batch. Larger = fewer LLM calls but more tokens per call.
+          Decisions per batch. Half anchor (cached) + half rotate. Larger = fewer rounds.
         </div>
       </div>
 
@@ -161,20 +161,20 @@
         <div class="section-title">Batch Plan</div>
         <div class="batch-plan" id="batchPlan">
           <div class="plan-row">
-            <span class="label">Optimal k (new per batch)</span>
-            <span class="value" id="planK">—</span>
+            <span class="label">Anchor (cached per pass)</span>
+            <span class="value" id="planAnchor">—</span>
           </div>
           <div class="plan-row">
-            <span class="label">Old per batch</span>
-            <span class="value" id="planOld">—</span>
+            <span class="label">Rotate (per round)</span>
+            <span class="value" id="planRotate">—</span>
           </div>
           <div class="plan-row">
-            <span class="label">Total batches</span>
-            <span class="value" id="planBatches">—</span>
+            <span class="label">Passes</span>
+            <span class="value" id="planPasses">—</span>
           </div>
           <div class="plan-row">
-            <span class="label">Est. LLM calls</span>
-            <span class="value" id="planCalls">—</span>
+            <span class="label">Total rounds (LLM calls)</span>
+            <span class="value" id="planRounds">—</span>
           </div>
           <div class="plan-formula" id="planFormula">
             Configure batch size and refresh stats to see the plan.
@@ -226,7 +226,7 @@
 <script>
   // ── State ──
   let mode = 'summary'
-  let batchSize = 50
+  let batchSize = 100
   let stats = { pending: 0, total: 0, connected: 0, newDecisions: 0 }
   let eventSource = null
   let startTime = 0
@@ -274,49 +274,40 @@
     updatePlan()
   }
 
-  // ── Batch plan calculation ──
+  // ── Batch plan calculation (anchor/rotate KV-cache strategy) ──
   function updatePlan() {
-    const M = stats.total - stats.newDecisions
-    const K = stats.newDecisions
+    const N = stats.newDecisions  // decisions with PENDING edges
     const B = batchSize
 
-    if (K === 0 || B < 2) {
-      document.getElementById('planK').textContent = '—'
-      document.getElementById('planOld').textContent = '—'
-      document.getElementById('planBatches').textContent = '—'
-      document.getElementById('planCalls').textContent = '—'
+    if (N < 2 || B < 2) {
+      document.getElementById('planAnchor').textContent = '—'
+      document.getElementById('planRotate').textContent = '—'
+      document.getElementById('planPasses').textContent = '—'
+      document.getElementById('planRounds').textContent = '—'
       document.getElementById('planFormula').textContent = 'Refresh stats to see pending decisions.'
       return
     }
 
-    // Special case: all decisions are new (M=0) — just batch them together
-    if (M === 0) {
-      const batches = Math.ceil(K / B)
-      document.getElementById('planK').textContent = Math.min(K, B)
-      document.getElementById('planOld').textContent = 0
-      document.getElementById('planBatches').textContent = batches
-      document.getElementById('planCalls').textContent = batches
-      document.getElementById('planFormula').textContent =
-        `All ${K} decisions are new. ${batches} batch(es) of up to ${B} decisions each.`
-      return
+    const anchorSize = Math.floor(B / 2)
+    const rotateSize = B - anchorSize
+
+    let totalRounds = 0, totalPasses = 0, P = N
+    while (P >= 2) {
+      const a = Math.min(anchorSize, P)
+      const remaining = P - a
+      if (remaining === 0) { totalRounds += 1; totalPasses += 1; break }
+      totalRounds += Math.ceil(remaining / rotateSize)
+      totalPasses += 1
+      P = remaining
     }
 
-    let bestK = 1, bestT = Infinity
-    for (let k = 1; k <= Math.min(K, B - 1); k++) {
-      const rounds = Math.ceil(M / (B - k))
-      const groups = Math.ceil(K / k)
-      const T = rounds * groups
-      if (T < bestT) { bestT = T; bestK = k }
-    }
-
-    const oldPerBatch = B - bestK
-    document.getElementById('planK').textContent = bestK
-    document.getElementById('planOld').textContent = oldPerBatch
-    document.getElementById('planBatches').textContent = bestT
-    document.getElementById('planCalls').textContent = bestT
+    document.getElementById('planAnchor').textContent = anchorSize
+    document.getElementById('planRotate').textContent = rotateSize
+    document.getElementById('planPasses').textContent = totalPasses
+    document.getElementById('planRounds').textContent = totalRounds
     document.getElementById('planFormula').textContent =
-      `T(k=${bestK}) = \u2308${M}/${oldPerBatch}\u2309 \u00d7 \u2308${K}/${bestK}\u2309 = ${bestT} batches\n` +
-      `Each batch: ${bestK} new + ${oldPerBatch} old = ${B} decisions`
+      `Pool=${N}, each pass: ${anchorSize} anchor (KV cached) + ${rotateSize} rotate\n` +
+      `${totalPasses} passes \u00d7 shrinking pool = ${totalRounds} total LLM grouping rounds`
   }
 
   // ── Status ──
