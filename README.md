@@ -139,6 +139,10 @@ Web UI for browsing decisions, visualizing coverage gaps, managing pipelines, an
 npm run dashboard    # http://localhost:3001
 ```
 
+### Concern Analysis
+
+Groups decisions into concerns — cohesive areas of design reasoning (e.g. "authentication strategy", "order lifecycle management"). Uses LLM-guided clustering: all decision summaries are sent to the LLM in a single pass to group by design intent, then each concern is analyzed for architectural layers, risks, and cross-concern dependencies. Available in the Dashboard under **Concerns**.
+
 ### Refinement pipeline
 
 Runs overnight to keep the graph accurate:

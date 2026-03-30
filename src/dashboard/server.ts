@@ -56,6 +56,7 @@ import {
   RunRecord, RunType,
 } from '../ingestion/run-history'
 import { validateAIConfig } from '../ai'
+import { detectCommunities, analyzeConcerns, ConcernAnalysis } from '../ingestion/concern-analysis'
 
 const app = new Hono()
 app.use('*', cors())
@@ -3426,6 +3427,124 @@ app.get('/decisions', (c) => {
 
 app.get('/query', (c) => {
   const htmlPath = path.resolve(__dirname, 'public', 'query.html')
+  const html = fs.readFileSync(htmlPath, 'utf-8')
+  return c.html(html)
+})
+
+// ── Concern Analysis API ──────────────────────────────────
+
+interface ConcernJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  logs: LogBuffer
+  result: ConcernAnalysis[] | null
+  startedAt: number
+  abortRequested: boolean
+}
+
+const concernJob: ConcernJob = {
+  status: 'idle', logs: new LogBuffer(), result: null,
+  startedAt: 0, abortRequested: false,
+}
+
+app.get('/api/concerns/detect', async (c) => {
+  const session = await getSession()
+  try {
+    const result = await detectCommunities(session)
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+app.post('/api/concerns/analyze', async (c) => {
+  if (concernJob.status === 'running') {
+    return c.json({ error: 'Analysis already running' }, 409)
+  }
+
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  concernJob.status = 'running'
+  concernJob.logs.clear()
+  concernJob.result = null
+  concernJob.startedAt = Date.now()
+  concernJob.abortRequested = false
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(concernJob.logs, JSON.stringify({ type: 'started' }))
+
+      const result = await analyzeConcerns({
+        dbSession: session,
+        ai,
+        onProgress: (msg) => {
+          pushLog(concernJob.logs, JSON.stringify({ type: 'progress', message: msg }))
+        },
+      })
+
+      concernJob.result = result.concerns
+      concernJob.status = 'done'
+      pushLog(concernJob.logs, JSON.stringify({
+        type: 'done',
+        total: result.totalCommunities,
+        analyzed: result.analyzedCommunities,
+        skipped: result.skippedSingleton,
+      }))
+    } catch (err: any) {
+      concernJob.status = 'error'
+      pushLog(concernJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started' })
+})
+
+app.post('/api/concerns/stop', (c) => {
+  if (concernJob.status === 'running') {
+    concernJob.abortRequested = true
+    pushLog(concernJob.logs, JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'ok' })
+})
+
+app.get('/api/concerns/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = concernJob.logs.readAfter(lastSeq)
+      for (const entry of entries) {
+        await stream.writeSSE({ data: entry, event: 'log' })
+      }
+      if (entries.length > 0) lastSeq = newSeq
+
+      if (concernJob.status !== 'running' && concernJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: concernJob.status, event: 'status' })
+        break
+      }
+
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+app.get('/api/concerns/results', (c) => {
+  return c.json({
+    status: concernJob.status,
+    concerns: concernJob.result,
+  })
+})
+
+// ── Page Routes ───────────────────────────────────────────
+
+app.get('/concerns', (c) => {
+  const htmlPath = path.resolve(__dirname, 'public', 'concerns.html')
   const html = fs.readFileSync(htmlPath, 'utf-8')
   return c.html(html)
 })

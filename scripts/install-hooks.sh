@@ -30,7 +30,7 @@ install_to_project() {
   local MCP_FILE="$PROJECT_DIR/.mcp.json"
   if [ -f "$MCP_FILE" ]; then
     # 检查是否已有 ckg 配置
-    if grep -q '"ckg"' "$MCP_FILE" 2>/dev/null; then
+    if grep -q '"context-chain"' "$MCP_FILE" 2>/dev/null; then
       echo "  ✓ .mcp.json 已有 ckg 配置，跳过"
     else
       echo "  ⚠️ .mcp.json 已存在但没有 ckg 配置"
@@ -41,7 +41,7 @@ install_to_project() {
     cat > "$MCP_FILE" << MCPEOF
 {
   "mcpServers": {
-    "ckg": {
+    "context-chain": {
       "command": "$CKG_DIR/mcp-start.sh",
       "cwd": "$CKG_DIR",
       "env": {

@@ -52,3 +52,6 @@ fix-sidebar.py
 data/session-states/
 data/logs/
 run.sh
+
+# Local notes (not part of the project)
+docs/internal/
