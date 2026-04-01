@@ -112,8 +112,32 @@ export function extractFunctionCode(
   if (!srcPath) return null
   try {
     const lines = fs.readFileSync(srcPath, 'utf-8').split('\n')
-    const start = Math.max(0, lineStart - 1)
-    const end = Math.min(lines.length, lineEnd)
+    // Scan upward from lineStart to include preceding JSDoc/comment block
+    let start = Math.max(0, lineStart - 1)
+    let scan = start - 1
+    while (scan >= 0) {
+      const trimmed = lines[scan].trimStart()
+      if (trimmed.startsWith('*') || trimmed.startsWith('/**') || trimmed.startsWith('*/') ||
+          trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed === '') {
+        scan--
+      } else {
+        break
+      }
+    }
+    start = scan + 1
+    // Scan downward from lineEnd to include trailing comment block
+    let end = Math.min(lines.length, lineEnd)
+    let scanDown = end
+    while (scanDown < lines.length) {
+      const trimmed = lines[scanDown].trimStart()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/**') ||
+          trimmed.startsWith('*/') || trimmed.startsWith('#') || trimmed === '') {
+        scanDown++
+      } else {
+        break
+      }
+    }
+    end = scanDown
     const code = lines.slice(start, end).join('\n')
     return code.length > 5000 ? code.slice(0, 5000) + '\n// [truncated]' : code
   } catch { return null }

@@ -46,7 +46,8 @@ import {
   getFilesFromGraph, getBusinessContext, buildCallerCalleeCodes,
   batchWriteDecisions,
 } from '../ingestion/shared'
-import { analyzeFunction } from '../core/analyze-function'
+import { analyzeFunction, analyzeFunctionBatch, analyzeChainBatch } from '../core/analyze-function'
+import { buildRelationshipBatches, type RelationshipBatch } from '../core/batch-grouping'
 import {
   createPendingEdges, connectDecisions, getPendingStatus,
   BatchProgressEvent,
@@ -451,6 +452,122 @@ app.get('/api/browse', async (c) => {
   }
 })
 
+// ── API: Detect source directory ──────────────────────────
+function detectSrcDir(repoPath: string): { srcDir: string; explanation: string } | { srcDir: null; explanation: string } {
+  // 1. pnpm-workspace.yaml
+  const pnpmWs = path.join(repoPath, 'pnpm-workspace.yaml')
+  if (fs.existsSync(pnpmWs)) {
+    const content = fs.readFileSync(pnpmWs, 'utf-8')
+    const match = content.match(/packages:\s*\n\s*-\s*['"]?([^'"\n*]+)/)
+    if (match) {
+      const dir = match[1].replace(/\/\*.*$/, '').replace(/\/$/, '')
+      if (fs.existsSync(path.join(repoPath, dir))) {
+        return { srcDir: dir, explanation: `Detected from pnpm-workspace.yaml → "${dir}/"` }
+      }
+    }
+  }
+
+  // 2. package.json workspaces
+  const pkgJson = path.join(repoPath, 'package.json')
+  if (fs.existsSync(pkgJson)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJson, 'utf-8'))
+      const workspaces = Array.isArray(pkg.workspaces) ? pkg.workspaces : pkg.workspaces?.packages
+      if (Array.isArray(workspaces) && workspaces.length > 0) {
+        const first = workspaces[0].replace(/\/\*.*$/, '').replace(/\/$/, '')
+        if (first && fs.existsSync(path.join(repoPath, first))) {
+          return { srcDir: first, explanation: `Detected from package.json workspaces → "${first}/"` }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. lerna.json
+  const lernaJson = path.join(repoPath, 'lerna.json')
+  if (fs.existsSync(lernaJson)) {
+    try {
+      const lerna = JSON.parse(fs.readFileSync(lernaJson, 'utf-8'))
+      if (Array.isArray(lerna.packages) && lerna.packages.length > 0) {
+        const first = lerna.packages[0].replace(/\/\*.*$/, '').replace(/\/$/, '')
+        if (first && fs.existsSync(path.join(repoPath, first))) {
+          return { srcDir: first, explanation: `Detected from lerna.json → "${first}/"` }
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Cargo workspace (Rust)
+  const cargoToml = path.join(repoPath, 'Cargo.toml')
+  if (fs.existsSync(cargoToml)) {
+    const content = fs.readFileSync(cargoToml, 'utf-8')
+    if (content.includes('[workspace]')) {
+      const match = content.match(/members\s*=\s*\[([^\]]+)\]/)
+      if (match) {
+        const first = match[1].split(',')[0].replace(/['"\s]/g, '').replace(/\/\*.*$/, '')
+        if (first && fs.existsSync(path.join(repoPath, first))) {
+          return { srcDir: first, explanation: `Detected from Cargo.toml workspace → "${first}/"` }
+        }
+      }
+    }
+  }
+
+  // 5. Go modules — check for cmd/ + pkg/ or internal/ pattern
+  const goMod = path.join(repoPath, 'go.mod')
+  if (fs.existsSync(goMod)) {
+    // Go projects typically use the repo root
+    const hasSrc = fs.existsSync(path.join(repoPath, 'src'))
+    if (hasSrc) {
+      return { srcDir: 'src', explanation: 'Go project with src/ directory' }
+    }
+    return { srcDir: '.', explanation: 'Go project — using repo root (standard Go layout)' }
+  }
+
+  // 6. Python — check for src layout or top-level package
+  const pyproject = path.join(repoPath, 'pyproject.toml')
+  const setupPy = path.join(repoPath, 'setup.py')
+  if (fs.existsSync(pyproject) || fs.existsSync(setupPy)) {
+    if (fs.existsSync(path.join(repoPath, 'src'))) {
+      return { srcDir: 'src', explanation: 'Python src-layout detected → "src/"' }
+    }
+    // Look for a top-level package dir matching project name
+    return { srcDir: '.', explanation: 'Python project — using repo root (flat layout)' }
+  }
+
+  // 7. Common directory names fallback
+  const commonDirs = ['src', 'lib', 'app', 'packages', 'crates']
+  for (const dir of commonDirs) {
+    const full = path.join(repoPath, dir)
+    if (fs.existsSync(full) && fs.statSync(full).isDirectory()) {
+      return { srcDir: dir, explanation: `Found common source directory → "${dir}/"` }
+    }
+  }
+
+  // 8. Source files directly in root → use "."
+  const sourceExts = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.c', '.cpp']
+  try {
+    const entries = fs.readdirSync(repoPath)
+    const hasSourceFiles = entries.some(e => sourceExts.some(ext => e.endsWith(ext)))
+    if (hasSourceFiles) {
+      return { srcDir: '.', explanation: 'Source files found in repo root — using "." as source directory' }
+    }
+  } catch {}
+
+  // 9. Nothing detected
+  return { srcDir: null, explanation: 'Could not auto-detect source directory. Please specify manually — this is the subdirectory containing your main source code (e.g. "src", "packages", "lib", or "." for repo root).' }
+}
+
+app.post('/api/repos/detect-src', async (c) => {
+  try {
+    const { repoPath } = await c.req.json()
+    if (!repoPath) return c.json({ error: 'repoPath is required' }, 400)
+    if (!fs.existsSync(repoPath)) return c.json({ error: `Path not found: ${repoPath}` }, 400)
+    const result = detectSrcDir(repoPath)
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 // ── API: Add / Delete repo ──────────────────────────────
 
 app.post('/api/repos', async (c) => {
@@ -482,7 +599,7 @@ app.post('/api/repos', async (c) => {
     cpgFile: cpgFile || `data/${name}.json`,
     packages: packages || [],
       language: language || 'javascript',
-      srcDir: srcDir || 'src',
+      srcDir: srcDir || detectSrcDir(repoPath).srcDir || '.',
   }
   if (skipEdgeFunctions) newRepo.skipEdgeFunctions = true
 
@@ -509,9 +626,29 @@ app.delete('/api/repos/:name', async (c) => {
       return c.json({ error: `Repo "${name}" not found` }, 404)
     }
 
+    const removed = raw.repos[idx]
     raw.repos.splice(idx, 1)
     fs.writeFileSync(configPath, JSON.stringify(raw, null, 2))
     clearConfigCache()
+
+    // Delete CPG files from disk
+    const dataDir = path.resolve(__dirname, '../../data')
+    if (removed.cpgFile) {
+      const cpgJson = path.resolve(__dirname, '../..', removed.cpgFile)
+      if (fs.existsSync(cpgJson)) fs.unlinkSync(cpgJson)
+      const cpgBin = cpgJson.replace(/\.json$/, '.cpg.bin')
+      if (fs.existsSync(cpgBin)) fs.unlinkSync(cpgBin)
+    }
+
+    // Remove this repo's nodes from Memgraph
+    try {
+      const session = await getSession()
+      try {
+        await session.run('MATCH (n {repo: $name}) DETACH DELETE n', { name })
+      } finally {
+        await session.close()
+      }
+    } catch {}
 
     return c.json({ status: 'deleted', name })
   } catch (err: any) {
@@ -551,6 +688,46 @@ app.get('/api/coverage/:repo', async (c) => {
     })
   } catch (err: any) {
     console.error('GET /api/coverage error:', err.message)
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// ── API: Packages ────────────────────────────────────────
+
+app.get('/api/packages/:repo', async (c) => {
+  const repo = c.req.param('repo')
+  const session = await getSession()
+  try {
+    // Get all functions with their file paths
+    const result = await session.run(`
+      MATCH (fn:CodeEntity {entity_type: 'function', repo: $repo})
+      WHERE fn.name <> ':program' AND fn.line_start > 0
+      OPTIONAL MATCH (fn)<-[:ANCHORED_TO]-(d:DecisionContext)
+      WITH fn, fn.path AS filePath, count(d) > 0 AS hasDecision
+      RETURN filePath, fn.name AS fnName, hasDecision
+    `, { repo })
+
+    // Group by top-level directory
+    const pkgMap = new Map()
+    for (const rec of result.records) {
+      const filePath = rec.get('filePath') || ''
+      const parts = filePath.split('/')
+      const pkg = parts.length > 1 ? parts[0] : '(root)'
+      if (!pkgMap.has(pkg)) pkgMap.set(pkg, { name: pkg, files: new Set(), functions: 0, analyzed: 0 })
+      const p = pkgMap.get(pkg)
+      p.files.add(filePath)
+      p.functions++
+      if (rec.get('hasDecision')) p.analyzed++
+    }
+
+    const packages = [...pkgMap.values()]
+      .map(p => ({ ...p, files: p.files.size }))
+      .sort((a, b) => b.functions - a.functions)
+
+    return c.json({ packages })
+  } catch (err) {
     return c.json({ error: err.message }, 500)
   } finally {
     await session.close()
@@ -1257,6 +1434,25 @@ app.post('/api/system/run', async (c) => {
       if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile)
     } catch {}
   }
+  if (command === 'nuke-db') {
+    steps.push({
+      label: 'Delete ALL data in Memgraph',
+      cmd: tsNode,
+      args: ['--transpile-only', '-e',
+        `const {getSession,verifyConnectivity,closeDriver}=require('./src/db/client');(async()=>{await verifyConnectivity();const s=await getSession();const r=await s.run('MATCH (n) DETACH DELETE n RETURN count(n) AS cnt');console.log('Deleted '+r.records[0].get('cnt')+' nodes (all data wiped)');await s.close();await closeDriver()})()`,
+      ],
+    })
+    saveRunHistory([])
+    // Delete all CPG files and local state
+    const dataDir = path.resolve(__dirname, '../../data')
+    try {
+      for (const f of fs.readdirSync(dataDir)) {
+        if (f.endsWith('.cpg.bin') || f.endsWith('.json')) {
+          fs.unlinkSync(path.join(dataDir, f))
+        }
+      }
+    } catch {}
+  }
 
   if (steps.length === 0) {
     return c.json({ error: `Unknown command: ${command}` }, 400)
@@ -1879,7 +2075,7 @@ async function deleteOldDecisionsForFunction(
 }
 
 /** Core async analysis loop — runs in server process */
-async function runAnalysis(repo: string, concurrency: number, advancedConfig?: { advancedMode?: boolean; contextModules?: Record<string, boolean>; maxRounds?: number }): Promise<void> {
+async function runAnalysis(repo: string, concurrency: number, advancedConfig?: { advancedMode?: boolean; contextModules?: Record<string, boolean>; maxRounds?: number }, batchSize: number = 1, packageFilter?: string[], chainMode: boolean = false): Promise<void> {
   // Use a dedicated session only for initial queries; workers get their own sessions
   const initSession = await getSession()
   try {
@@ -1894,6 +2090,20 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       for (const fn of file.functions) {
         allFunctions.push({ name: fn.name, filePath: file.filePath, lineStart: fn.lineStart, lineEnd: fn.lineEnd })
       }
+    }
+
+    // Apply package filter (top-level directory)
+    if (packageFilter && packageFilter.length > 0) {
+      const pkgSet = new Set(packageFilter)
+      const before = allFunctions.length
+      const filtered = allFunctions.filter(fn => {
+        const parts = fn.filePath.split('/')
+        const pkg = parts.length > 1 ? parts[0] : '(root)'
+        return pkgSet.has(pkg)
+      })
+      allFunctions.length = 0
+      allFunctions.push(...filtered)
+      pushLog(runJob.logs, `Package filter: ${packageFilter.join(', ')} → ${allFunctions.length}/${before} functions`)
     }
 
     // Load resume state
@@ -1923,7 +2133,8 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       provider: config.ai?.provider,
     })
 
-    pushLog(runJob.logs, `Starting analysis: ${remaining.length} functions (${analyzedSet.size} skipped)`)
+    const effectiveBatchSize = Math.max(1, Math.min(10, batchSize))
+    pushLog(runJob.logs, `Starting analysis: ${remaining.length} functions (${analyzedSet.size} skipped), concurrency=${concurrency}, batchSize=${effectiveBatchSize}`)
     pushLog(runJob.logs, JSON.stringify({ type: 'progress', analyzed: 0, decisions: 0, total: runJob.total, skipped: runJob.skipped }))
 
     if (remaining.length === 0) {
@@ -1932,106 +2143,315 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       return
     }
 
+    // Group functions into batches
+    type FnItem = typeof remaining[0]
+    let relationshipBatches: RelationshipBatch[] = []
+    if (chainMode) {
+      try {
+        pushLog(runJob.logs, `Chain Analysis enabled — grouping by call graph`)
+        const { batches: rBatches, stats } = await buildRelationshipBatches(
+          initSession, remaining, repo, effectiveBatchSize
+        )
+        relationshipBatches = rBatches
+        pushLog(runJob.logs, `Batch formation: ${stats.totalFunctions} functions → ${stats.chainBatches} chain batches (${stats.chainFunctions} fns) + ${stats.linearBatches} linear batches (${stats.orphanFunctions} fns)`)
+        pushLog(runJob.logs, `Graph: ${stats.edgeCount} CALLS edges, density=${stats.avgDensity.toFixed(2)} edges/fn`)
+        if (stats.splitsDueToSize > 0) {
+          pushLog(runJob.logs, `${stats.splitsDueToSize} batches trimmed to fit context window`)
+        }
+        if (stats.centersChosen.length > 0) {
+          pushLog(runJob.logs, `Centers: ${stats.centersChosen.slice(0, 10).map(c => c.split('::')[1]).join(', ')}${stats.centersChosen.length > 10 ? ` +${stats.centersChosen.length - 10} more` : ''}`)
+        }
+      } catch (err: any) {
+        pushLog(runJob.logs, `Chain batching failed (${err.message}), falling back to linear`)
+      }
+    }
+
+    // Fallback: if relationship batching produced nothing, use linear
+    if (relationshipBatches.length === 0) {
+      for (let i = 0; i < remaining.length; i += effectiveBatchSize) {
+        const chunk = remaining.slice(i, i + effectiveBatchSize)
+        relationshipBatches.push({
+          functions: chunk.map(fn => ({ functionName: fn.name, filePath: fn.filePath, lineStart: fn.lineStart, lineEnd: fn.lineEnd })),
+          centerKey: null,
+          contextOnlyKeys: new Set(),
+          internalEdges: [],
+          existingDecisionKeys: new Set(),
+          mode: 'linear',
+        })
+      }
+    }
+
     // Close init session before starting workers (they each get their own)
     await initSession.close()
 
-    // Process functions with concurrency — each worker gets its own Neo4j session
-    await runWithConcurrency(remaining, concurrency, async (fn) => {
+    // Map relationship batches back to FnItem format for the processing loop
+    const batches: { fnItems: FnItem[]; relBatch: RelationshipBatch }[] = relationshipBatches.map(rb => ({
+      fnItems: rb.functions.map(fn => {
+        const orig = remaining.find(r => r.name === fn.functionName && r.filePath === fn.filePath)
+        return orig ?? { name: fn.functionName, filePath: fn.filePath, lineStart: fn.lineStart, lineEnd: fn.lineEnd }
+      }),
+      relBatch: rb,
+    }))
+
+    // Process batches with concurrency
+    let totalTokensSaved = 0
+    await runWithConcurrency(batches, concurrency, async ({ fnItems: batch, relBatch }) => {
       if (runJob.abortRequested) return
 
-      const fnIdx = runJob.functions.findIndex(f => f.name === fn.name && f.file === fn.filePath)
-      if (fnIdx >= 0) runJob.functions[fnIdx].status = 'running'
-      pushLog(runJob.logs, JSON.stringify({ type: 'function-start', name: fn.name, file: fn.filePath, index: fnIdx }))
+      // Mark all functions in batch as running
+      const fnIndices = batch.map(fn => runJob.functions.findIndex(f => f.name === fn.name && f.file === fn.filePath))
+      for (const fnIdx of fnIndices) {
+        if (fnIdx >= 0) runJob.functions[fnIdx].status = 'running'
+      }
+      const batchMode = relBatch.mode
+      const batchNames = batch.map(fn => fn.name).join(', ')
+      pushLog(runJob.logs, JSON.stringify({ type: 'function-start', name: batchNames, file: batch[0].filePath, index: fnIndices[0], mode: batchMode, center: relBatch.centerKey?.split('::')[1] ?? null }))
 
-      // Per-worker session for safe concurrent DB access
       const workerSession = await getSession()
       try {
-        await deleteOldDecisionsForFunction(workerSession, fn.name, fn.filePath, repo)
+        // Delete old decisions for all functions in batch
+        for (const fn of batch) {
+          await deleteOldDecisionsForFunction(workerSession, fn.name, fn.filePath, repo)
+        }
 
         const configOverrides: Record<string, any> = {}
         if (advancedConfig?.contextModules) configOverrides.advanced_modules = advancedConfig.contextModules
         if (advancedConfig?.maxRounds) configOverrides.advanced_max_rounds = advancedConfig.maxRounds
-
         const templateName = advancedConfig?.advancedMode ? '_advanced' : '_default'
 
-        const result = await analyzeFunction(
-          {
-            functionName: fn.name,
-            filePath: fn.filePath,
+        const onRetry = (info: { status: number; attempt: number; maxRetries: number; waitSec: number }) => {
+          pushLog(runJob.logs, JSON.stringify({
+            type: 'rate-limit', name: batchNames, file: batch[0].filePath,
+            status: info.status, attempt: info.attempt, maxRetries: info.maxRetries, waitSec: info.waitSec,
+          }))
+        }
+        const onRateLimit = (info: any) => {
+          if (info.status !== 'allowed') {
+            pushLog(runJob.logs, JSON.stringify({
+              type: 'quota-warning', status: info.status, rateLimitType: info.rateLimitType,
+              utilization: info.utilization, resetsAt: info.resetsAt,
+            }))
+          }
+        }
+
+        if (batchMode === 'chain' && batch.length > 1) {
+          // ── Chain batch: relationship-aware analysis ──
+          const chainResult = await analyzeChainBatch(
+            relBatch,
             repo,
-            repoPath: repoConfig.path,
-            lineStart: fn.lineStart,
-            lineEnd: fn.lineEnd,
-            owner: 'dashboard',
-            session: workerSession,
-          },
-          configOverrides,
-          templateName,
-        )
+            repoConfig.path,
+            workerSession,
+            configOverrides,
+            templateName,
+            onRetry,
+            onRateLimit,
+          )
 
-        const decCount = result.decisions.length
-        runJob.analyzed++
-        runJob.decisions += decCount
+          // Track token savings
+          totalTokensSaved += chainResult.tokenSavings.estimatedTokensSaved
+          if (chainResult.tokenSavings.sharedSnippetCount > 0) {
+            pushLog(runJob.logs, JSON.stringify({
+              type: 'chain-stats', center: relBatch.centerKey?.split('::')[1],
+              sharedSnippets: chainResult.tokenSavings.sharedSnippetCount,
+              dedupedRefs: chainResult.tokenSavings.dedupedReferences,
+              estimatedSaved: chainResult.tokenSavings.estimatedTokensSaved,
+            }))
+          }
 
-        // Accumulate batch-level totals
-        const fnInput = result.metadata.token_usage?.input_tokens ?? 0
-        const fnOutput = result.metadata.token_usage?.output_tokens ?? 0
-        const fnCacheCreate = result.metadata.token_usage?.cache_creation_input_tokens ?? 0
-        const fnCacheRead = result.metadata.token_usage?.cache_read_input_tokens ?? 0
-        historyRecord.inputTokens += fnInput
-        historyRecord.outputTokens += fnOutput
-        historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + fnCacheCreate
-        historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + fnCacheRead
-        historyRecord.functionsAnalyzed++
-        historyRecord.decisionsCreated += decCount
+          // Process results for each function
+          const batchTokens = chainResult.metadata.token_usage
+          const perFnInput = Math.round((batchTokens.input_tokens ?? 0) / batch.length)
+          const perFnOutput = Math.round((batchTokens.output_tokens ?? 0) / batch.length)
 
-        if (decCount > 0) {
-          await batchWriteDecisions(workerSession, result.decisions)
-          const newIds = result.decisions.map(d => d.id)
-          await createPendingEdges(workerSession, newIds, { verbose: false })
+          historyRecord.inputTokens += batchTokens.input_tokens ?? 0
+          historyRecord.outputTokens += batchTokens.output_tokens ?? 0
+          historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + (batchTokens.cache_creation_input_tokens ?? 0)
+          historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + (batchTokens.cache_read_input_tokens ?? 0)
+
+          for (let i = 0; i < chainResult.results.length; i++) {
+            const result = chainResult.results[i]
+            const fn = batch[i]
+            const fnIdx = fnIndices[i]
+            const decCount = result.decisions.length
+
+            runJob.analyzed++
+            runJob.decisions += decCount
+            historyRecord.functionsAnalyzed++
+            historyRecord.decisionsCreated += decCount
+
+            if (decCount > 0) {
+              await batchWriteDecisions(workerSession, result.decisions)
+              const newIds = result.decisions.map(d => d.id)
+              await createPendingEdges(workerSession, newIds, { verbose: false })
+            }
+
+            if (fnIdx >= 0) {
+              runJob.functions[fnIdx].status = 'done'
+              runJob.functions[fnIdx].decisions = decCount
+            }
+
+            const durSec = (chainResult.metadata.duration_ms / 1000).toFixed(1)
+            pushLog(runJob.logs, JSON.stringify({
+              type: 'function-done', name: fn.name, file: fn.filePath,
+              decisions: decCount, duration: durSec, index: fnIdx, mode: 'chain',
+            }))
+
+            const fnRecord = createRunRecord('analyze', {
+              repo, template: templateName, model: historyRecord.model, provider: historyRecord.provider,
+              functionName: fn.name, filePath: fn.filePath, batchId: historyRecord.id,
+              inputTokens: perFnInput, outputTokens: perFnOutput,
+              decisionsCreated: decCount, functionsAnalyzed: 1,
+            })
+            fnRecord.durationMs = chainResult.metadata.duration_ms
+            fnRecord.completedAt = new Date().toISOString()
+            fnRecord.totalTokens = perFnInput + perFnOutput
+            appendRunRecord(fnRecord)
+
+            state.analyzed.push(`${fn.filePath}::${fn.name}`)
+            saveRunState(state)
+          }
+
+        } else if (batch.length > 1) {
+          // ── Linear batch: original batch analysis (no relationship info) ──
+          const batchResult = await analyzeFunctionBatch(
+            batch.map(fn => ({
+              functionName: fn.name,
+              filePath: fn.filePath,
+              lineStart: fn.lineStart,
+              lineEnd: fn.lineEnd,
+            })),
+            repo,
+            repoConfig.path,
+            workerSession,
+            configOverrides,
+            templateName,
+            onRetry,
+            onRateLimit,
+          )
+
+          const batchTokens = batchResult.metadata.token_usage
+          const perFnInput = Math.round((batchTokens.input_tokens ?? 0) / batch.length)
+          const perFnOutput = Math.round((batchTokens.output_tokens ?? 0) / batch.length)
+
+          historyRecord.inputTokens += batchTokens.input_tokens ?? 0
+          historyRecord.outputTokens += batchTokens.output_tokens ?? 0
+          historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + (batchTokens.cache_creation_input_tokens ?? 0)
+          historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + (batchTokens.cache_read_input_tokens ?? 0)
+
+          for (let i = 0; i < batchResult.results.length; i++) {
+            const result = batchResult.results[i]
+            const fn = batch[i]
+            const fnIdx = fnIndices[i]
+            const decCount = result.decisions.length
+
+            runJob.analyzed++
+            runJob.decisions += decCount
+            historyRecord.functionsAnalyzed++
+            historyRecord.decisionsCreated += decCount
+
+            if (decCount > 0) {
+              await batchWriteDecisions(workerSession, result.decisions)
+              const newIds = result.decisions.map(d => d.id)
+              await createPendingEdges(workerSession, newIds, { verbose: false })
+            }
+
+            if (fnIdx >= 0) {
+              runJob.functions[fnIdx].status = 'done'
+              runJob.functions[fnIdx].decisions = decCount
+            }
+
+            const durSec = (batchResult.metadata.duration_ms / 1000).toFixed(1)
+            pushLog(runJob.logs, JSON.stringify({
+              type: 'function-done', name: fn.name, file: fn.filePath,
+              decisions: decCount, duration: durSec, index: fnIdx, mode: 'linear',
+            }))
+
+            const fnRecord = createRunRecord('analyze', {
+              repo, template: templateName, model: historyRecord.model, provider: historyRecord.provider,
+              functionName: fn.name, filePath: fn.filePath, batchId: historyRecord.id,
+              inputTokens: perFnInput, outputTokens: perFnOutput,
+              decisionsCreated: decCount, functionsAnalyzed: 1,
+            })
+            fnRecord.durationMs = batchResult.metadata.duration_ms
+            fnRecord.completedAt = new Date().toISOString()
+            fnRecord.totalTokens = perFnInput + perFnOutput
+            appendRunRecord(fnRecord)
+
+            state.analyzed.push(`${fn.filePath}::${fn.name}`)
+            saveRunState(state)
+          }
+
+        } else {
+          // ── Single function: original path ──
+          const fn = batch[0]
+          const fnIdx = fnIndices[0]
+
+          const result = await analyzeFunction(
+            {
+              functionName: fn.name, filePath: fn.filePath, repo, repoPath: repoConfig.path,
+              lineStart: fn.lineStart, lineEnd: fn.lineEnd, owner: 'dashboard', session: workerSession,
+              onRetry, onRateLimit,
+            },
+            configOverrides, templateName,
+          )
+
+          const decCount = result.decisions.length
+          runJob.analyzed++
+          runJob.decisions += decCount
+
+          const fnInput = result.metadata.token_usage?.input_tokens ?? 0
+          const fnOutput = result.metadata.token_usage?.output_tokens ?? 0
+          const fnCacheCreate = result.metadata.token_usage?.cache_creation_input_tokens ?? 0
+          const fnCacheRead = result.metadata.token_usage?.cache_read_input_tokens ?? 0
+          historyRecord.inputTokens += fnInput
+          historyRecord.outputTokens += fnOutput
+          historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + fnCacheCreate
+          historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + fnCacheRead
+          historyRecord.functionsAnalyzed++
+          historyRecord.decisionsCreated += decCount
+
+          if (decCount > 0) {
+            await batchWriteDecisions(workerSession, result.decisions)
+            const newIds = result.decisions.map(d => d.id)
+            await createPendingEdges(workerSession, newIds, { verbose: false })
+          }
+
+          if (fnIdx >= 0) {
+            runJob.functions[fnIdx].status = 'done'
+            runJob.functions[fnIdx].decisions = decCount
+          }
+
+          const durSec = (result.metadata.duration_ms / 1000).toFixed(1)
+          pushLog(runJob.logs, JSON.stringify({
+            type: 'function-done', name: fn.name, file: fn.filePath,
+            decisions: decCount, duration: durSec, index: fnIdx,
+          }))
+
+          const fnRecord = createRunRecord('analyze', {
+            repo, template: templateName, model: historyRecord.model, provider: historyRecord.provider,
+            functionName: fn.name, filePath: fn.filePath, batchId: historyRecord.id,
+            inputTokens: fnInput, outputTokens: fnOutput,
+            cacheCreationTokens: fnCacheCreate || undefined, cacheReadTokens: fnCacheRead || undefined,
+            decisionsCreated: decCount, functionsAnalyzed: 1,
+          })
+          fnRecord.durationMs = result.metadata.duration_ms
+          fnRecord.completedAt = new Date().toISOString()
+          fnRecord.totalTokens = fnInput + fnOutput
+          appendRunRecord(fnRecord)
+
+          state.analyzed.push(`${fn.filePath}::${fn.name}`)
+          saveRunState(state)
         }
-
-        if (fnIdx >= 0) {
-          runJob.functions[fnIdx].status = 'done'
-          runJob.functions[fnIdx].decisions = decCount
-        }
-
-        const durSec = (result.metadata.duration_ms / 1000).toFixed(1)
-        pushLog(runJob.logs, JSON.stringify({
-          type: 'function-done', name: fn.name, file: fn.filePath,
-          decisions: decCount, duration: durSec, index: fnIdx,
-        }))
-
-        // Per-function history record
-        const fnRecord = createRunRecord('analyze', {
-          repo,
-          template: templateName,
-          model: historyRecord.model,
-          provider: historyRecord.provider,
-          functionName: fn.name,
-          filePath: fn.filePath,
-          batchId: historyRecord.id,
-          inputTokens: fnInput,
-          outputTokens: fnOutput,
-          cacheCreationTokens: fnCacheCreate || undefined,
-          cacheReadTokens: fnCacheRead || undefined,
-          decisionsCreated: decCount,
-          functionsAnalyzed: 1,
-        })
-        fnRecord.durationMs = result.metadata.duration_ms
-        fnRecord.completedAt = new Date().toISOString()
-        fnRecord.totalTokens = fnInput + fnOutput
-        appendRunRecord(fnRecord)
-
-        // Only mark as analyzed on success — errors will be retried on next run
-        state.analyzed.push(`${fn.filePath}::${fn.name}`)
-        saveRunState(state)
       } catch (err: any) {
-        if (fnIdx >= 0) runJob.functions[fnIdx].status = 'error'
+        for (const fnIdx of fnIndices) {
+          if (fnIdx >= 0 && runJob.functions[fnIdx].status === 'running') {
+            runJob.functions[fnIdx].status = 'error'
+          }
+        }
         historyRecord.errors++
         pushLog(runJob.logs, JSON.stringify({
-          type: 'function-error', name: fn.name, file: fn.filePath,
-          error: err.message, stack: err.stack?.split('\n')[1]?.trim(), index: fnIdx,
+          type: 'function-error', name: batchNames, file: batch[0].filePath,
+          error: err.message, stack: err.stack?.split('\n')[1]?.trim(), index: fnIndices[0],
         }))
       } finally {
         await workerSession.close()
@@ -2051,7 +2471,10 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       pushLog(runJob.logs, JSON.stringify({ type: 'stopped', analyzed: runJob.analyzed, decisions: runJob.decisions }))
     } else {
       runJob.status = 'done'
-      pushLog(runJob.logs, JSON.stringify({ type: 'done', analyzed: runJob.analyzed, decisions: runJob.decisions }))
+      pushLog(runJob.logs, JSON.stringify({ type: 'done', analyzed: runJob.analyzed, decisions: runJob.decisions, estimatedTokensSaved: totalTokensSaved }))
+      if (totalTokensSaved > 0) {
+        pushLog(runJob.logs, `Chain analysis dedup saved ~${totalTokensSaved.toLocaleString()} tokens across all batches`)
+      }
     }
 
     // Persist run history
@@ -2086,7 +2509,7 @@ app.post('/api/run/start', async (c) => {
   }
 
   const body = await c.req.json()
-  const { repo, summaryWords, contentWords, concurrency = 2, advancedMode, contextModules, maxRounds } = body
+  const { repo, summaryWords, contentWords, concurrency = 2, batchSize = 1, chainMode = false, packages, advancedMode, contextModules, maxRounds } = body
 
   if (!repo) return c.json({ error: 'repo is required' }, 400)
 
@@ -2129,7 +2552,9 @@ app.post('/api/run/start', async (c) => {
 
   // Kick off analysis (don't await)
   const advCfg = advancedMode ? { advancedMode, contextModules, maxRounds } : undefined
-  runAnalysis(repo, concurrency, advCfg).catch(err => {
+  const clampedBatch = chainMode ? 8 : Math.max(1, Math.min(10, batchSize || 1))
+  const pkgFilter = Array.isArray(packages) && packages.length > 0 ? packages : undefined
+  runAnalysis(repo, concurrency, advCfg, clampedBatch, pkgFilter, chainMode).catch(err => {
     runJob.status = 'error'
     pushLog(runJob.logs,JSON.stringify({ type: 'error', error: err.message }))
   })
@@ -2245,7 +2670,7 @@ app.post('/api/group/start', async (c) => {
   if (grpAiErr) return c.json({ error: grpAiErr }, 400)
 
   const body = await c.req.json()
-  const { mode = 'summary', batchSize = 100 } = body
+  const { mode = 'summary', batchSize = 200 } = body
 
   // Reset job
   groupJob.status = 'running'
@@ -3150,7 +3575,7 @@ app.get('/api/feedback/stats', async (c) => {
 
     // Get never-used decisions
     const allDecisions = await session.run(
-      `MATCH (d:DecisionContext) RETURN d.id AS id, d.summary AS summary, d.source AS source, d.created_at AS created_at LIMIT 500`
+      `MATCH (d:DecisionContext) RETURN d.id AS id, d.summary AS summary, d.source AS source, d.created_at AS created_at`
     )
     const neverUsed = allDecisions.records
       .filter(r => !useCounts[r.get('id')])
@@ -3541,6 +3966,98 @@ app.get('/api/concerns/results', (c) => {
   })
 })
 
+// ── API: Quota tracking setup ──────────────────────────────
+
+const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
+const RATE_LIMITS_FILE = path.join(os.homedir(), '.claude', 'rate-limits.json')
+const STATUSLINE_SCRIPT = path.join(os.homedir(), '.claude', 'ckg-statusline.py')
+
+const STATUSLINE_SCRIPT_CONTENT = `#!/usr/bin/env python3
+"""CKG statusline script — writes rate_limits to ~/.claude/rate-limits.json"""
+import json, sys, os, time
+try:
+    d = json.load(sys.stdin)
+    rl = d.get('rate_limits', {})
+    if rl:
+        out = {'rate_limits': rl, 'ts': int(time.time())}
+        p = os.path.join(os.path.expanduser('~'), '.claude', 'rate-limits.json')
+        with open(p, 'w') as f:
+            json.dump(out, f)
+    # Output for statusline display
+    h5 = rl.get('five_hour', {}).get('used_percentage')
+    d7 = rl.get('seven_day', {}).get('used_percentage')
+    parts = []
+    if h5 is not None: parts.append(f'5h:{h5:.0f}%')
+    if d7 is not None: parts.append(f'7d:{d7:.0f}%')
+    print(' | '.join(parts) if parts else '')
+except:
+    print('')
+`
+
+app.get('/api/system/quota-tracking', (c) => {
+  // Check if statusline is already configured
+  let enabled = false
+  try {
+    if (fs.existsSync(CLAUDE_SETTINGS_PATH)) {
+      const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf-8'))
+      enabled = settings.statusLine?.command?.includes('ckg-statusline') ?? false
+    }
+  } catch {}
+
+  // Check if we have recent rate limit data
+  let rateLimits = null
+  try {
+    if (fs.existsSync(RATE_LIMITS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(RATE_LIMITS_FILE, 'utf-8'))
+      const ageSec = Math.floor((Date.now() / 1000) - (data.ts ?? 0))
+      if (ageSec < 300) { // stale after 5 min
+        rateLimits = { ...data.rate_limits, ageSec }
+      }
+    }
+  } catch {}
+
+  return c.json({ enabled, rateLimits })
+})
+
+app.post('/api/system/quota-tracking/enable', (c) => {
+  try {
+    // 1. Write statusline script
+    fs.writeFileSync(STATUSLINE_SCRIPT, STATUSLINE_SCRIPT_CONTENT, { mode: 0o755 })
+
+    // 2. Update ~/.claude/settings.json
+    let settings: any = {}
+    if (fs.existsSync(CLAUDE_SETTINGS_PATH)) {
+      settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf-8'))
+    }
+    settings.statusLine = {
+      type: 'command',
+      command: STATUSLINE_SCRIPT,
+    }
+    fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2))
+
+    return c.json({ status: 'enabled' })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.post('/api/system/quota-tracking/disable', (c) => {
+  try {
+    // Remove statusLine from settings
+    if (fs.existsSync(CLAUDE_SETTINGS_PATH)) {
+      const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf-8'))
+      delete settings.statusLine
+      fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2))
+    }
+    // Remove script and data file
+    try { fs.unlinkSync(STATUSLINE_SCRIPT) } catch {}
+    try { fs.unlinkSync(RATE_LIMITS_FILE) } catch {}
+    return c.json({ status: 'disabled' })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 // ── Page Routes ───────────────────────────────────────────
 
 app.get('/concerns', (c) => {
@@ -3617,6 +4134,12 @@ app.get('/feedback', (c) => {
 
 app.get('/relationships', (c) => {
   const htmlPath = path.resolve(__dirname, 'public', 'relationships.html')
+  const html = fs.readFileSync(htmlPath, 'utf-8')
+  return c.html(html)
+})
+
+app.get('/packages', (c) => {
+  const htmlPath = path.resolve(__dirname, 'public', 'packages.html')
   const html = fs.readFileSync(htmlPath, 'utf-8')
   return c.html(html)
 })

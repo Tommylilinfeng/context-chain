@@ -140,9 +140,54 @@
 
       <hr class="divider">
 
-      <!-- Analysis Config -->
+      <!-- Chain Analysis toggle -->
       <div>
-        <div class="section-title">Analysis Output</div>
+        <div class="section-title">Batching Strategy</div>
+        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:8px 0">
+          <input type="checkbox" id="chainMode" checked>
+          <div>
+            <div style="font-weight:600">Chain Analysis</div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Group by call graph, deduplicate shared context</div>
+          </div>
+        </label>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Throughput -->
+      <div>
+        <div class="section-title">Throughput</div>
+        <div class="config-row">
+          <div class="field">
+            <label>Concurrency</label>
+            <input type="number" id="concurrencyInput" value="2" min="1" max="8">
+          </div>
+          <div class="field" id="batchSizeField">
+            <label>Batch size</label>
+            <input type="number" id="batchSizeInput" value="1" min="1" max="10">
+          </div>
+        </div>
+        <div class="hint" id="throughputHint">Concurrency: parallel workers. Batch size: functions per LLM call.</div>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Packages filter -->
+      <div id="packagesFilter" style="display:none">
+        <div class="section-title">Packages</div>
+        <div id="packagesList" style="display:flex;flex-direction:column;gap:4px;font-size:12px;max-height:160px;overflow-y:auto"></div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button class="btn-ghost" style="padding:2px 8px;font-size:11px" onclick="toggleAllPackages(true)">All</button>
+          <button class="btn-ghost" style="padding:2px 8px;font-size:11px" onclick="toggleAllPackages(false)">None</button>
+          <span id="pkgCount" style="font-size:11px;color:var(--text-dim);align-self:center;margin-left:auto"></span>
+        </div>
+      </div>
+
+      <hr class="divider" id="pkgDivider" style="display:none">
+
+      <!-- Output config -->
+      <div>
+        <div class="section-title">Output</div>
         <div class="config-row">
           <div class="field">
             <label>Summary words</label>
@@ -153,37 +198,23 @@
             <input type="number" id="contentWords" value="150" min="50" max="500">
           </div>
         </div>
-        <div class="hint">
-          Controls LLM output length per decision. Changes are saved to ckg.config.json.
-        </div>
-      </div>
-
-      <hr class="divider">
-
-      <!-- Concurrency -->
-      <div>
-        <div class="section-title">Concurrency</div>
-        <input type="number" id="concurrencyInput" value="2" min="1" max="8" style="width:80px;text-align:center;font-family:var(--mono);">
-        <div class="hint">Number of functions analyzed in parallel.</div>
       </div>
 
       <hr class="divider">
 
       <!-- Analysis Mode -->
       <div>
-        <div class="section-title">Analysis Mode</div>
+        <div class="section-title">Advanced</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-          <input type="checkbox" id="advancedMode"> Advanced (multi-round)
+          <input type="checkbox" id="advancedMode"> Multi-round (LLM requests more context)
         </label>
-        <div class="hint">LLM can request additional context across multiple rounds.</div>
       </div>
 
       <div id="contextModules" style="display:none">
-        <div class="section-title" style="margin-top:8px">Context Modules</div>
-        <div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;margin-top:8px">
           <label style="cursor:pointer"><input type="checkbox" id="mod-callerCode" checked> Caller code</label>
           <label style="cursor:pointer"><input type="checkbox" id="mod-calleeCode" checked> Callee code</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-twoHopNames" checked> 2-hop function names</label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-twoHopNames" checked> 2-hop names</label>
           <label style="cursor:pointer"><input type="checkbox" id="mod-existingDecisions" checked> Existing decisions</label>
           <label style="cursor:pointer"><input type="checkbox" id="mod-businessContext" checked> Business context</label>
           <label style="cursor:pointer"><input type="checkbox" id="mod-fileContext"> File context</label>
@@ -198,20 +229,9 @@
       <hr class="divider">
 
       <!-- Actions -->
-      <button class="btn-primary" id="startBtn">
-        <span>▶</span> Start Analysis
-      </button>
-      <button class="btn-stop" id="stopBtn" style="display:none">
-        <span>■</span> Stop After Current Function
-      </button>
+      <button class="btn-primary" id="startBtn">Start Analysis</button>
+      <button class="btn-stop" id="stopBtn" style="display:none">Stop</button>
       <div id="inlineError" style="display:none;font-size:12px;color:var(--red);background:rgba(240,86,86,0.06);border:1px solid rgba(240,86,86,0.15);border-radius:6px;padding:8px 12px;margin-top:8px;line-height:1.5"></div>
-
-      <hr class="divider">
-
-      <!-- Run info -->
-      <div id="runInfo" style="font-size:12px;color:var(--text-dim);line-height:1.6;">
-        Analyzes every function in the selected repo one by one. Each function is extracted, triaged, and deeply analyzed for design decisions. You can stop at any time — progress is saved. Next run continues from where you left off.
-      </div>
     </div>
 
     <!-- ── Right: Output ── -->
@@ -241,6 +261,10 @@
             <div class="progress-stat">
               <div class="value" id="skippedCount" style="color:var(--text-dim)">0</div>
               <div class="label">Skipped</div>
+            </div>
+            <div class="progress-stat" id="tokensSavedStat" style="display:none">
+              <div class="value" id="tokensSavedCount" style="color:var(--yellow,orange)">0</div>
+              <div class="label">Tokens saved</div>
             </div>
           </div>
           <div class="progress-bar-wrap">
@@ -392,7 +416,8 @@
       try {
         const d = JSON.parse(e.data)
         updateFnItem(d.index, 'running', 0)
-        document.getElementById('currentFunction').textContent = `Analyzing ${d.name} (${d.file})`
+        const modeTag = d.mode === 'chain' ? `<span style="color:var(--accent);font-size:11px;margin-left:6px">[chain: ${d.center || '?'}]</span>` : ''
+        document.getElementById('currentFunction').innerHTML = `Analyzing ${d.name} (${d.file})${modeTag}`
       } catch {}
       updateElapsed()
     })
@@ -411,6 +436,26 @@
       } catch {}
     })
 
+    eventSource.addEventListener('rate-limit', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        document.getElementById('currentFunction').innerHTML =
+          `<span style="color:var(--yellow,orange)">⏳ Rate limited (${d.status}) — retry ${d.attempt}/${d.maxRetries}, waiting ${d.waitSec}s</span> <span style="color:var(--text-dim)">${d.name}</span>`
+      } catch {}
+    })
+
+    eventSource.addEventListener('quota-warning', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        const util = d.utilization != null ? ` (${Math.round(d.utilization * 100)}% used)` : ''
+        const reset = d.resetsAt ? new Date(d.resetsAt * 1000).toLocaleTimeString() : '?'
+        const color = d.status === 'rejected' ? 'var(--red)' : 'var(--yellow,orange)'
+        const icon = d.status === 'rejected' ? '🛑' : '⚠️'
+        document.getElementById('currentFunction').innerHTML =
+          `<span style="color:${color}">${icon} 5h quota ${d.status}${util} — resets at ${reset}</span>`
+      } catch {}
+    })
+
     eventSource.addEventListener('progress', (e) => {
       try {
         const d = JSON.parse(e.data)
@@ -422,8 +467,27 @@
       updateElapsed()
     })
 
+    eventSource.addEventListener('chain-stats', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        const saved = parseInt(document.getElementById('tokensSavedCount').textContent.replace(/,/g, '')) || 0
+        const newTotal = saved + (d.estimatedSaved || 0)
+        if (newTotal > 0) {
+          document.getElementById('tokensSavedStat').style.display = ''
+          document.getElementById('tokensSavedCount').textContent = newTotal.toLocaleString()
+        }
+      } catch {}
+    })
+
     eventSource.addEventListener('done', (e) => {
       setStatus('done')
+      try {
+        const d = JSON.parse(e.data)
+        if (d.estimatedTokensSaved > 0) {
+          document.getElementById('tokensSavedStat').style.display = ''
+          document.getElementById('tokensSavedCount').textContent = d.estimatedTokensSaved.toLocaleString()
+        }
+      } catch {}
       document.getElementById('currentFunction').textContent = 'Analysis complete'
       eventSource.close()
       eventSource = null
@@ -457,6 +521,20 @@
     }
   }
 
+  // ── Chain mode toggle — hides batch size when chain is on ──
+  function updateChainModeUI() {
+    const isChain = document.getElementById('chainMode').checked
+    const batchField = document.getElementById('batchSizeField')
+    const hint = document.getElementById('throughputHint')
+    batchField.style.opacity = isChain ? '0.35' : '1'
+    batchField.style.pointerEvents = isChain ? 'none' : 'auto'
+    hint.textContent = isChain
+      ? 'Chain Analysis auto-sizes batches by call graph. Concurrency: parallel workers.'
+      : 'Concurrency: parallel workers. Batch size: functions per LLM call.'
+  }
+  document.getElementById('chainMode').addEventListener('change', updateChainModeUI)
+  updateChainModeUI()
+
   // ── Advanced mode toggle ──
   document.getElementById('advancedMode').addEventListener('change', (e) => {
     document.getElementById('contextModules').style.display = e.target.checked ? 'block' : 'none'
@@ -487,11 +565,16 @@
     if (!repo) { errEl.textContent = 'Please select a repository first.'; errEl.style.display = 'block'; return }
 
     const advCfg = getAdvancedConfig()
+    const selectedPkgs = getSelectedPackages()
+    const isChainMode = document.getElementById('chainMode').checked
     const payload = {
       repo,
       summaryWords: parseInt(document.getElementById('summaryWords').value),
       contentWords: parseInt(document.getElementById('contentWords').value),
       concurrency: parseInt(document.getElementById('concurrencyInput').value) || 2,
+      batchSize: isChainMode ? 8 : (parseInt(document.getElementById('batchSizeInput').value) || 1),
+      chainMode: isChainMode,
+      ...(selectedPkgs ? { packages: selectedPkgs } : {}),
       ...advCfg,
     }
 
@@ -644,8 +727,76 @@
     }
   }
 
-  // Reload browse data when repo changes
-  document.getElementById('repoSelect').addEventListener('change', () => { browseData = null })
+  // Reload browse data and packages when repo changes
+  document.getElementById('repoSelect').addEventListener('change', () => {
+    browseData = null
+    loadPackages()
+  })
+
+  // ── Packages filter ──
+  let packagesData = []
+
+  async function loadPackages() {
+    const repo = document.getElementById('repoSelect').value
+    const filterEl = document.getElementById('packagesFilter')
+    const divider = document.getElementById('pkgDivider')
+    if (!repo) { filterEl.style.display = 'none'; divider.style.display = 'none'; return }
+    try {
+      const res = await fetch(`/api/packages/${encodeURIComponent(repo)}`)
+      const data = await res.json()
+      packagesData = data.packages || []
+      if (packagesData.length === 0) { filterEl.style.display = 'none'; divider.style.display = 'none'; return }
+      filterEl.style.display = 'block'
+      divider.style.display = 'block'
+      renderPackages()
+    } catch { filterEl.style.display = 'none'; divider.style.display = 'none' }
+  }
+
+  function renderPackages() {
+    const list = document.getElementById('packagesList')
+    // Check URL params for pre-selected packages
+    const params = new URLSearchParams(location.search)
+    const preSelected = params.get('packages') ? params.get('packages').split(',') : null
+    list.innerHTML = packagesData.map(p => {
+      const checked = preSelected ? preSelected.includes(p.name) : true
+      const pct = p.functions > 0 ? Math.round(p.analyzed / p.functions * 100) : 0
+      return `<label style="cursor:pointer;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" class="pkg-cb" value="${escHtml(p.name)}" ${checked ? 'checked' : ''} onchange="updatePkgCount()">
+        <span style="font-family:var(--mono);flex:1">${escHtml(p.name)}</span>
+        <span style="color:var(--text-dim)">${p.functions}fn</span>
+        <span style="color:var(--green);min-width:32px;text-align:right">${pct}%</span>
+      </label>`
+    }).join('')
+    updatePkgCount()
+    // Also set repo from URL if present
+    if (params.get('repo')) {
+      document.getElementById('repoSelect').value = params.get('repo')
+    }
+  }
+
+  function updatePkgCount() {
+    const checked = document.querySelectorAll('.pkg-cb:checked')
+    const total = document.querySelectorAll('.pkg-cb')
+    const fns = [...checked].reduce((sum, cb) => {
+      const pkg = packagesData.find(p => p.name === cb.value)
+      return sum + (pkg ? pkg.functions : 0)
+    }, 0)
+    document.getElementById('pkgCount').textContent = `${checked.length}/${total.length} packages · ${fns} functions`
+  }
+
+  function toggleAllPackages(state) {
+    document.querySelectorAll('.pkg-cb').forEach(cb => cb.checked = state)
+    updatePkgCount()
+  }
+
+  function getSelectedPackages() {
+    const cbs = document.querySelectorAll('.pkg-cb:checked')
+    if (cbs.length === 0 || cbs.length === packagesData.length) return null // all or none = no filter
+    return [...cbs].map(cb => cb.value)
+  }
+
+  // Load packages on initial page load
+  setTimeout(loadPackages, 300)
 </script>
 </body>
 </html>

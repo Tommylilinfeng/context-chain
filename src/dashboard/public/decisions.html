@@ -657,7 +657,7 @@ function esc(s) {
 // ── Init ───────────────────────────────────────────
 async function init() {
   const [decisions, repoData] = await Promise.all([
-    api('/api/decisions?limit=500'),
+    api('/api/decisions?limit=10000'),
     api('/api/repos')
   ])
 
@@ -718,8 +718,12 @@ function applyFilters() {
     return true
   })
 
-  // Sort
+  // Sort — bug/suboptimal always float to top within each sort mode
+  const typePriority = { bug: 0, suboptimal: 1, decision: 2 }
   filteredDecisions.sort((a, b) => {
+    const pa = typePriority[a.finding_type] ?? 2
+    const pb = typePriority[b.finding_type] ?? 2
+    if (pa !== pb) return pa - pb
     if (sort === 'newest') return (b.created_at || '').localeCompare(a.created_at || '')
     if (sort === 'oldest') return (a.created_at || '').localeCompare(b.created_at || '')
     if (sort === 'anchors') return (b.anchors || []).length - (a.anchors || []).length

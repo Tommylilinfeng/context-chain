@@ -196,7 +196,7 @@ function scanRouteDefinitions(dir: string, repoName: string, repoRoot: string, s
     const relPath = path.relative(repoRoot, file)
     // 从文件路径推断 route（Next.js 风格）
     const routePath = relPath
-      .replace(/^(pages|app)\/api\//, '/api/')
+      .replace(/^(src\/)?(pages|app)\/api\//, '/api/')
       .replace(/\.(ts|tsx|js|jsx)$/, '')
       .replace(/\/index$/, '')
       .replace(/\/route$/, '')

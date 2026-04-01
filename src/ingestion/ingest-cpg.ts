@@ -241,6 +241,48 @@ async function ingest(): Promise<void> {
     console.log('\n🔗 建 CONTAINS 边...')
     await buildContainsEdges(session, data.nodes, data.repo)
 
+    // 3. Resolve callee_id mismatches
+    // Joern callee_id often includes scope prefix (e.g. "::program:require" vs node "::require")
+    // Build lookup: (file_prefix, function_name) → node_id
+    const nodeIdSet = new Set(data.nodes.map(n => n.id))
+    const nodeByFileName = new Map<string, string>() // "fn:repo/file.ts::name" → node_id
+    const nodeByName = new Map<string, string[]>()    // "name" → [node_id, ...]
+    for (const n of data.nodes) {
+      const parts = n.id.split('::')
+      if (parts.length === 2 && parts[1]) {
+        nodeByFileName.set(n.id, n.id)
+        if (!nodeByName.has(parts[1])) nodeByName.set(parts[1], [])
+        nodeByName.get(parts[1])!.push(n.id)
+      }
+    }
+
+    let resolvedCount = 0
+    for (const call of internalCalls) {
+      if (nodeIdSet.has(call.callee_id)) continue // already matches
+      const calleeName = call.callee_name
+      if (!calleeName) continue
+
+      // Try same-file resolution: caller's file prefix + callee_name
+      const callerFile = call.caller_id.split('::')[0]
+      const sameFileId = `${callerFile}::${calleeName}`
+      if (nodeIdSet.has(sameFileId)) {
+        call.callee_id = sameFileId
+        resolvedCount++
+        continue
+      }
+
+      // Cross-file: find any node with this function name
+      const candidates = nodeByName.get(calleeName)
+      if (candidates && candidates.length === 1) {
+        call.callee_id = candidates[0]
+        resolvedCount++
+      }
+      // If multiple candidates, skip (ambiguous)
+    }
+    if (resolvedCount > 0) {
+      console.log(`\n🔧 Resolved ${resolvedCount} callee ID mismatches (scope prefix normalization)`)
+    }
+
     // 3. 建关系边（按 edge_type 分组）
     const edgeGroups = new Map<string, CallEdge[]>()
     for (const call of internalCalls) {

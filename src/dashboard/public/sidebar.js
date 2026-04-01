@@ -32,6 +32,7 @@ var ICONS = {
   onboarding:    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M8 2v12"/><circle cx="8" cy="8" r="6.5"/></svg>',
   group:         '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><path d="M6 4h4M4 6v4M12 6v4M6 12h4"/></svg>',
   localize:      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c-2 2-3 4-3 6.5s1 4.5 3 6.5M8 1.5c2 2 3 4 3 6.5s-1 4.5-3 6.5"/></svg>',
+  packages:      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l6-2 6 2v8l-6 2-6-2V4z"/><path d="M8 6v8M2 4l6 2 6-2"/></svg>',
   search:        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>',
 }
 
@@ -42,6 +43,7 @@ var I18N = {
     'brand.name': 'Context Chain',
     'brand.tagline': 'grep finds what code does.<br>We record why it was written that way.',
     'nav.explore': 'Explore', 'nav.ingest': 'Ingest', 'nav.admin': 'Admin',
+    'nav.packages': 'Packages',
     'nav.overview': 'Overview', 'nav.decisions': 'Decisions', 'nav.relationships': 'Relationships', 'nav.concerns': 'Concerns',
     'nav.coverage': 'Coverage', 'nav.dependencies': 'Dependencies', 'nav.feedback': 'Feedback',
     'nav.sessions': 'Sessions', 'nav.templates': 'Templates', 'nav.pipeline': 'Pipeline',
@@ -73,6 +75,7 @@ var I18N = {
     'brand.name': 'Context Chain',
     'brand.tagline': 'grep 找的是代码写了什么<br>我们记录的是代码为什么这样写',
     'nav.explore': '浏览', 'nav.ingest': '摄入', 'nav.admin': '管理',
+    'nav.packages': '代码包',
     'nav.overview': '概览', 'nav.decisions': '决策', 'nav.relationships': '关系图', 'nav.concerns': '关注点',
     'nav.coverage': '覆盖率', 'nav.dependencies': '依赖', 'nav.feedback': '反馈',
     'nav.sessions': 'Sessions', 'nav.templates': '模板', 'nav.pipeline': '管线',
@@ -107,6 +110,7 @@ var _lang = localStorage.getItem('ckg-lang') || 'en'
 function t(key) { return I18N[_lang]?.[key] ?? I18N.en?.[key] ?? key }
 
 var PAGE_KEY_MAP = {
+  '/packages': 'packages',
   '/overview': 'overview', '/decisions': 'decisions', '/relationships': 'relationships', '/concerns': 'concerns',
   '/coverage': 'coverage', '/dependencies': 'dependencies', '/feedback': 'feedback',
   '/sessions': 'sessions', '/templates': 'templates', '/pipeline': 'pipeline',
@@ -147,6 +151,7 @@ var NAV = [
     { href: '/onboarding',   iconKey: 'onboarding', key: 'nav.onboarding' },
     { href: '/query',        iconKey: 'query',   key: 'nav.query' },
     { href: '/system',       iconKey: 'system',  key: 'nav.system' },
+    { href: '/packages',     iconKey: 'packages',   key: 'nav.packages' },
   ]},
 ]
 

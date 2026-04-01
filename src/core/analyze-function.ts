@@ -30,6 +30,7 @@ import {
   extractFunctionCode, readFullFile, resolveSourcePath,
   parseJsonSafe, toNum,
 } from '../ingestion/shared'
+import type { RelationshipBatch } from './batch-grouping'
 
 const DEBUG = process.env.CKG_DEBUG === '1'
 
@@ -689,7 +690,7 @@ async function analyzeFunctionAdvanced(
   for (let round = 1; round <= maxRounds; round++) {
     const roundStart = Date.now()
 
-    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms })
+    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms, onRetry: input.onRetry, onRateLimit: input.onRateLimit })
     const parsed = parseJsonSafe<AdvancedRoundOutput>(raw, { decisions: [], requests: [] })
 
     // Normalize: if LLM returned an array, treat as decisions-only
@@ -950,7 +951,7 @@ export async function analyzeFunction(
       : appConfig.ai
     ai = createAIProvider(aiConfig as any)
 
-    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms })
+    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms, onRetry: input.onRetry, onRateLimit: input.onRateLimit })
 
     // 12. 解析输出
     const rawDecisions = parseJsonSafe<ExtractedDecision[]>(raw, [])
@@ -1034,5 +1035,601 @@ export async function analyzeFunction(
     if (ownSession) {
       await session.close()
     }
+  }
+}
+
+// ── Batch analysis: multiple functions in one LLM call ──────────
+
+export interface BatchFunctionInput {
+  functionName: string
+  filePath: string
+  lineStart: number
+  lineEnd: number
+}
+
+export interface AnalyzeFunctionBatchResult {
+  results: AnalyzeFunctionResult[]
+  metadata: {
+    token_usage: TokenUsage
+    duration_ms: number
+    batch_size: number
+  }
+}
+
+export async function analyzeFunctionBatch(
+  functions: BatchFunctionInput[],
+  repo: string,
+  repoPath: string,
+  session: Session,
+  configOverrides?: Partial<AnalyzeFunctionConfig>,
+  templateName?: string,
+  onRetry?: AnalyzeFunctionInput['onRetry'],
+  onRateLimit?: AnalyzeFunctionInput['onRateLimit'],
+): Promise<AnalyzeFunctionBatchResult> {
+  const startTime = Date.now()
+  const resolvedTemplateName = templateName ?? '_default'
+  const { config } = loadTemplate(resolvedTemplateName, configOverrides)
+
+  let ai: AIProvider | null = null
+  try {
+    // 1. Gather context for all functions
+    const fnContexts: { input: BatchFunctionInput; code: string; callers: CodeSnippet[]; callees: CodeSnippet[] }[] = []
+
+    for (const fn of functions) {
+      const code = extractCode(repoPath, {
+        name: fn.functionName, filePath: fn.filePath,
+        lineStart: fn.lineStart, lineEnd: fn.lineEnd, repo,
+      }, config.target_code, config.target_max_lines) ?? readFullFile(repoPath, fn.filePath) ?? ''
+
+      const callerLevels = await getCallersMultiLevel(
+        session, fn.functionName, fn.filePath, repo,
+        config.caller_depth, config.max_callers_per_level, config.include_cross_repo
+      )
+      const calleeLevels = await getCalleesMultiLevel(
+        session, fn.functionName, fn.filePath, repo,
+        config.callee_depth, config.max_callees_per_level, config.include_cross_repo
+      )
+
+      const callerSnippets: CodeSnippet[] = []
+      for (const level of callerLevels) {
+        for (const node of level) {
+          const nodeRepoPath = node.repo === repo ? repoPath : resolveRepoPath(node.repo, '')
+          const c = extractCode(nodeRepoPath, node, config.caller_code, config.caller_max_lines)
+          callerSnippets.push({ name: node.name, filePath: node.filePath, code: c ?? '', lineStart: node.lineStart, lineEnd: node.lineEnd })
+        }
+      }
+
+      const calleeSnippets: CodeSnippet[] = []
+      for (const level of calleeLevels) {
+        for (const node of level) {
+          const nodeRepoPath = node.repo === repo ? repoPath : resolveRepoPath(node.repo, '')
+          const c = extractCode(nodeRepoPath, node, config.callee_code, config.callee_max_lines)
+          calleeSnippets.push({ name: node.name, filePath: node.filePath, code: c ?? '', lineStart: node.lineStart, lineEnd: node.lineEnd })
+        }
+      }
+
+      fnContexts.push({ input: fn, code, callers: callerSnippets, callees: calleeSnippets })
+    }
+
+    // 2. Build combined prompt
+    const findingTypeDesc = config.finding_types.includes('bug') || config.finding_types.includes('suboptimal')
+      ? `\nAlso classify each finding:
+- **decision**: Intentional, reasonable design choice.
+- **suboptimal**: Works correctly but there's a significantly better approach.
+- **bug**: Behavior does NOT match expected business logic.
+Default to "decision" unless you have clear evidence otherwise.`
+      : ''
+
+    const summaryGuide = config.summary_length === 'short' ? '10-25 words' :
+      config.summary_length === 'long' ? '40-80 words' : '20-50 words'
+
+    const langGuide = config.language === 'zh' ? '\nRespond in Chinese.' :
+      config.language === 'en' ? '\nRespond in English.' : ''
+
+    const stablePrefix = `You are analyzing ${functions.length} functions to extract design decisions.
+
+## Instructions
+
+A design decision explains:
+- WHY this approach was chosen over alternatives
+- WHAT trade-offs were made
+- WHAT alternatives were considered
+${findingTypeDesc}
+
+For EACH function below, extract up to ${config.max_decisions} design decisions.
+
+Return ONLY a raw JSON array (no markdown, no backticks) containing decisions from ALL functions:
+[{
+  "function": "<function_name>",
+  "file": "<file_path>",
+  "related_functions": ["otherFunc1"],
+  "summary": "${summaryGuide} — the decision with enough context to understand without seeing the code",
+  "content": "200-600 chars explaining WHY, trade-offs, alternatives",
+  "keywords": ["keyword1", "keyword2"],
+  "finding_type": "${config.finding_types[0]}"${config.finding_types.includes('bug') || config.finding_types.includes('suboptimal') ? ',\n  "critique": "only for suboptimal/bug"' : ''}
+}]
+
+IMPORTANT: The "function" field must exactly match the function name as given. The "file" field must exactly match the file path.
+Empty array [] if no decisions worth recording across all functions.${langGuide}
+`
+
+    const functionSections = fnContexts.map((fc, i) => {
+      const callerSection = formatCallerSection(fc.input.functionName, fc.callers)
+      const calleeSection = formatCalleeSection(fc.input.functionName, fc.callees)
+      return `---
+
+## Function ${i + 1}/${functions.length}: ${fc.input.functionName} (file: ${fc.input.filePath})
+\`\`\`
+${fc.code}
+\`\`\`
+${callerSection}${calleeSection}`
+    }).join('\n')
+
+    const prompt = stablePrefix + functionSections
+
+    // 3. Single AI call
+    const appConfig = loadConfig()
+    const aiConfig = config.ai_provider || config.model
+      ? { ...appConfig.ai, ...(config.ai_provider ? { provider: config.ai_provider } : {}), ...(config.model ? { model: config.model } : {}) }
+      : appConfig.ai
+    ai = createAIProvider(aiConfig as any)
+
+    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms, onRetry, onRateLimit })
+
+    // 4. Parse and distribute results
+    const rawDecisions = parseJsonSafe<(ExtractedDecision & { file?: string })[]>(raw, [])
+    const allowedTypes = new Set(config.finding_types)
+    const now = new Date().toISOString()
+    const owner = 'dashboard'
+
+    // Group decisions by function
+    const resultMap = new Map<string, PendingDecisionOutput[]>()
+    for (const fn of functions) {
+      resultMap.set(`${fn.filePath}::${fn.functionName}`, [])
+    }
+
+    if (Array.isArray(rawDecisions)) {
+      for (const d of rawDecisions) {
+        if (!d || !d.function || !d.summary || !d.content) continue
+        if (!allowedTypes.has(d.finding_type ?? 'decision')) continue
+
+        // Match to a function — try exact match on function name + file, fallback to function name only
+        const file = d.file ?? functions.find(f => f.functionName === d.function)?.filePath ?? functions[0].filePath
+        const key = `${file}::${d.function}`
+        const altKey = [...resultMap.keys()].find(k => k.endsWith(`::${d.function}`))
+        const targetKey = resultMap.has(key) ? key : (altKey ?? key)
+
+        if (!resultMap.has(targetKey)) continue
+
+        const filePath = targetKey.split('::')[0]
+        const pathSlug = filePath.replace(/\//g, '_').replace(/\.[^.]+$/, '')
+        const findingType = ['decision', 'suboptimal', 'bug'].includes(d.finding_type) ? d.finding_type : 'decision'
+        const idx = resultMap.get(targetKey)!.length
+
+        resultMap.get(targetKey)!.push({
+          id: `dc:af:${repo}:${pathSlug}:${d.function}:${Date.now()}-${idx}`,
+          props: {
+            summary: String(d.summary),
+            content: String(d.content),
+            keywords: Array.isArray(d.keywords) ? d.keywords : [],
+            scope: [repo],
+            owner,
+            session_id: `analyze-function-${now.slice(0, 10)}`,
+            commit_hash: 'analyze-function',
+            source: 'analyze_function',
+            confidence: 'auto_generated',
+            staleness: 'active',
+            finding_type: findingType,
+            ...(d.critique && findingType !== 'decision' ? { critique: String(d.critique) } : {}),
+            created_at: now,
+            updated_at: now,
+          },
+          functionName: String(d.function),
+          relatedFunctions: Array.isArray(d.related_functions) ? d.related_functions.map(String) : [],
+          filePath,
+          fileName: path.basename(filePath),
+          repo,
+        })
+      }
+    }
+
+    // 5. Build results array
+    const results: AnalyzeFunctionResult[] = functions.map(fn => {
+      const key = `${fn.filePath}::${fn.functionName}`
+      const decisions = resultMap.get(key) ?? []
+      return {
+        functionName: fn.functionName,
+        filePath: fn.filePath,
+        repo,
+        decisions,
+        metadata: {
+          template_used: resolvedTemplateName,
+          config_snapshot: configOverrides ?? {},
+          caller_count: 0,
+          callee_count: 0,
+          token_usage: ai!.lastUsage,
+          duration_ms: Date.now() - startTime,
+        },
+      }
+    })
+
+    return {
+      results,
+      metadata: {
+        token_usage: ai.lastUsage,
+        duration_ms: Date.now() - startTime,
+        batch_size: functions.length,
+      },
+    }
+  } finally {
+    ai?.cleanup()
+  }
+}
+
+// ── Chain Analysis — Relationship-Aware Batch Analysis ───
+
+export interface ChainBatchResult extends AnalyzeFunctionBatchResult {
+  /** Functions that were targets (produced decisions) */
+  targetKeys: string[]
+  /** Functions that were context-only (no decisions) */
+  contextOnlyKeys: string[]
+  /** Token savings from shared context dedup */
+  tokenSavings: {
+    sharedSnippetCount: number
+    dedupedReferences: number
+    estimatedTokensSaved: number
+  }
+}
+
+/**
+ * Analyze a chain batch with shared context deduplication.
+ *
+ * - Center + level-1 → analysis targets (produce decisions)
+ * - Level-2 → context-only (loaded once in shared pool)
+ * - Level-1 functions with existing decisions → existing decisions fed as context
+ * - Concurrent overlap: allowed, duplicates resolved later
+ */
+export async function analyzeChainBatch(
+  batch: RelationshipBatch,
+  repo: string,
+  repoPath: string,
+  session: Session,
+  configOverrides?: Partial<AnalyzeFunctionConfig>,
+  templateName?: string,
+  onRetry?: AnalyzeFunctionInput['onRetry'],
+  onRateLimit?: AnalyzeFunctionInput['onRateLimit'],
+): Promise<ChainBatchResult> {
+  const startTime = Date.now()
+  const resolvedTemplateName = templateName ?? '_default'
+  const { config } = loadTemplate(resolvedTemplateName, configOverrides)
+
+  let ai: AIProvider | null = null
+  try {
+    const targetFns = batch.functions
+    const targetKeys = new Set(targetFns.map(fn => `${fn.filePath}::${fn.functionName}`))
+
+    // 1. Load code for all targets
+    const targetCodeMap = new Map<string, string>()
+    for (const fn of targetFns) {
+      const code = extractCode(repoPath, {
+        name: fn.functionName, filePath: fn.filePath,
+        lineStart: fn.lineStart, lineEnd: fn.lineEnd, repo,
+      }, config.target_code, config.target_max_lines) ?? readFullFile(repoPath, fn.filePath) ?? ''
+      targetCodeMap.set(`${fn.filePath}::${fn.functionName}`, code)
+    }
+
+    // 2. For each target, fetch callers/callees. Separate into:
+    //    - inBatch: other targets in this batch (reference by Target N label)
+    //    - contextOnly: level-2 context functions (deduplicate)
+    //    - unique: only referenced by this one target
+
+    interface ContextSnippet {
+      key: string
+      name: string
+      filePath: string
+      code: string
+      referencedBy: Set<string> // target keys that reference this
+      direction: 'caller' | 'callee' | 'both'
+    }
+
+    const contextPool = new Map<string, ContextSnippet>()
+    const perTargetCallerKeys = new Map<string, string[]>() // targetKey → [contextKey or targetKey]
+    const perTargetCalleeKeys = new Map<string, string[]>()
+
+    for (const fn of targetFns) {
+      const fnKey = `${fn.filePath}::${fn.functionName}`
+
+      const callerLevels = await getCallersMultiLevel(
+        session, fn.functionName, fn.filePath, repo,
+        config.caller_depth, config.max_callers_per_level, config.include_cross_repo
+      )
+      const calleeLevels = await getCalleesMultiLevel(
+        session, fn.functionName, fn.filePath, repo,
+        config.callee_depth, config.max_callees_per_level, config.include_cross_repo
+      )
+
+      const callerRefs: string[] = []
+      for (const level of callerLevels) {
+        for (const node of level) {
+          const nodeKey = `${node.filePath}::${node.name}`
+          callerRefs.push(nodeKey)
+          if (targetKeys.has(nodeKey)) continue // skip — it's already a target
+          if (!contextPool.has(nodeKey)) {
+            const nodeRepoPath = node.repo === repo ? repoPath : resolveRepoPath(node.repo, '')
+            const code = extractCode(nodeRepoPath, node, config.caller_code, config.caller_max_lines) ?? ''
+            contextPool.set(nodeKey, { key: nodeKey, name: node.name, filePath: node.filePath, code, referencedBy: new Set(), direction: 'caller' })
+          }
+          contextPool.get(nodeKey)!.referencedBy.add(fnKey)
+        }
+      }
+      perTargetCallerKeys.set(fnKey, callerRefs)
+
+      const calleeRefs: string[] = []
+      for (const level of calleeLevels) {
+        for (const node of level) {
+          const nodeKey = `${node.filePath}::${node.name}`
+          calleeRefs.push(nodeKey)
+          if (targetKeys.has(nodeKey)) continue
+          if (!contextPool.has(nodeKey)) {
+            const nodeRepoPath = node.repo === repo ? repoPath : resolveRepoPath(node.repo, '')
+            const code = extractCode(nodeRepoPath, node, config.callee_code, config.callee_max_lines) ?? ''
+            contextPool.set(nodeKey, { key: nodeKey, name: node.name, filePath: node.filePath, code, referencedBy: new Set(), direction: 'callee' })
+          } else if (contextPool.get(nodeKey)!.direction === 'caller') {
+            contextPool.get(nodeKey)!.direction = 'both'
+          }
+          contextPool.get(nodeKey)!.referencedBy.add(fnKey)
+        }
+      }
+      perTargetCalleeKeys.set(fnKey, calleeRefs)
+    }
+
+    // 3. Partition context pool into shared (2+ references) vs unique (1 reference)
+    const sharedContext: ContextSnippet[] = []
+    const uniqueContext = new Map<string, ContextSnippet[]>() // targetKey → unique snippets
+    let dedupedReferences = 0
+
+    for (const [key, snippet] of contextPool) {
+      if (snippet.referencedBy.size >= 2) {
+        sharedContext.push(snippet)
+        dedupedReferences += snippet.referencedBy.size - 1 // saved N-1 duplicates
+      } else {
+        const targetKey = [...snippet.referencedBy][0]
+        if (!uniqueContext.has(targetKey)) uniqueContext.set(targetKey, [])
+        uniqueContext.get(targetKey)!.push(snippet)
+      }
+    }
+
+    // 4. Fetch existing decisions for targets that were already analyzed
+    const existingDecisionsMap = new Map<string, { summary: string; findingType: string }[]>()
+    for (const fn of targetFns) {
+      const decisions = await getExistingDecisions(session, fn.functionName, fn.filePath, repo)
+      if (decisions.length > 0) {
+        existingDecisionsMap.set(`${fn.filePath}::${fn.functionName}`, decisions)
+      }
+    }
+
+    // 5. Build relationship-aware prompt
+    const findingTypeDesc = config.finding_types.includes('bug') || config.finding_types.includes('suboptimal')
+      ? `\nAlso classify each finding:
+- **decision**: Intentional, reasonable design choice.
+- **suboptimal**: Works correctly but there's a significantly better approach.
+- **bug**: Behavior does NOT match expected business logic.
+Default to "decision" unless you have clear evidence otherwise.`
+      : ''
+
+    const summaryGuide = config.summary_length === 'short' ? '10-25 words' :
+      config.summary_length === 'long' ? '40-80 words' : '20-50 words'
+
+    const langGuide = config.language === 'zh' ? '\nRespond in Chinese.' :
+      config.language === 'en' ? '\nRespond in English.' : ''
+
+    const stablePrefix = `You are analyzing ${targetFns.length} related functions that form a connected call graph.
+
+## Instructions
+
+A design decision explains:
+- WHY this approach was chosen over alternatives
+- WHAT trade-offs were made
+- WHAT alternatives were considered
+${findingTypeDesc}
+
+These functions are related through caller/callee relationships. Shared context functions (labeled [S1], [S2], etc.) are referenced by multiple targets — they appear once in the Shared Context section. Target functions reference each other by (Target N) labels. Use the call graph to understand data and control flow.
+
+If a target function has existing decisions from a prior analysis, they are shown below it. You may:
+- Skip producing new decisions if existing ones are accurate
+- Produce new/modified decisions if the existing ones are incomplete or wrong
+- Reference existing decisions in your analysis of related functions
+
+For EACH target function below, extract up to ${config.max_decisions} design decisions.
+
+Return ONLY a raw JSON array (no markdown, no backticks):
+[{
+  "function": "<function_name>",
+  "file": "<file_path>",
+  "related_functions": ["otherFunc1"],
+  "summary": "${summaryGuide} — the decision with enough context to understand without seeing the code",
+  "content": "200-600 chars explaining WHY, trade-offs, alternatives",
+  "keywords": ["keyword1", "keyword2"],
+  "finding_type": "${config.finding_types[0]}"${config.finding_types.includes('bug') || config.finding_types.includes('suboptimal') ? ',\n  "critique": "only for suboptimal/bug"' : ''}
+}]
+
+IMPORTANT: The "function" field must exactly match the function name as given. The "file" field must exactly match the file path.
+Empty array [] if no decisions worth recording.${langGuide}
+`
+
+    // Build shared context section
+    let sharedSection = ''
+    const sharedLabels = new Map<string, string>() // key → [S1], [S2], ...
+    if (sharedContext.length > 0) {
+      sharedSection = '\n## Shared Context (referenced by multiple targets)\n'
+      sharedContext.forEach((s, i) => {
+        const label = `[S${i + 1}]`
+        sharedLabels.set(s.key, label)
+        sharedSection += `\n### ${label} ${s.filePath}::${s.name}\n\`\`\`\n${s.code}\n\`\`\`\n`
+      })
+    }
+
+    // Build call graph section
+    let callGraphSection = '\n## Call Graph\n'
+    for (const edge of batch.internalEdges) {
+      const callerLabel = targetKeys.has(edge.caller)
+        ? `${edge.caller.split('::')[1]} (Target)`
+        : sharedLabels.has(edge.caller) ? `${sharedLabels.get(edge.caller)} ${edge.caller.split('::')[1]}` : edge.caller.split('::')[1]
+      const calleeLabel = targetKeys.has(edge.callee)
+        ? `${edge.callee.split('::')[1]} (Target)`
+        : sharedLabels.has(edge.callee) ? `${sharedLabels.get(edge.callee)} ${edge.callee.split('::')[1]}` : edge.callee.split('::')[1]
+      callGraphSection += `${callerLabel} → ${calleeLabel}\n`
+    }
+
+    // Build per-target sections
+    const functionSections = targetFns.map((fn, i) => {
+      const fnKey = `${fn.filePath}::${fn.functionName}`
+      const code = targetCodeMap.get(fnKey) ?? ''
+
+      // Build caller/callee reference lines (not full code — just labels)
+      const callerKeys = perTargetCallerKeys.get(fnKey) ?? []
+      const calleeKeys = perTargetCalleeKeys.get(fnKey) ?? []
+
+      const callerLine = callerKeys.length > 0
+        ? `Callers: ${callerKeys.map(k => {
+            if (targetKeys.has(k)) return `${k.split('::')[1]} (Target)`
+            if (sharedLabels.has(k)) return `${sharedLabels.get(k)} ${k.split('::')[1]}`
+            return k.split('::')[1]
+          }).join(', ')}`
+        : ''
+
+      const calleeLine = calleeKeys.length > 0
+        ? `Callees: ${calleeKeys.map(k => {
+            if (targetKeys.has(k)) return `${k.split('::')[1]} (Target)`
+            if (sharedLabels.has(k)) return `${sharedLabels.get(k)} ${k.split('::')[1]}`
+            return k.split('::')[1]
+          }).join(', ')}`
+        : ''
+
+      // Existing decisions
+      const existing = existingDecisionsMap.get(fnKey)
+      const existingSection = existing && existing.length > 0
+        ? `\n### Existing decisions (from prior analysis):\n${existing.map(d => `- [${d.findingType}] ${d.summary}`).join('\n')}\n`
+        : ''
+
+      // Unique context (only referenced by this target)
+      const uniques = uniqueContext.get(fnKey) ?? []
+      const uniqueSection = uniques.length > 0
+        ? `\n### Unique context:\n${uniques.map(u => `#### ${u.filePath}::${u.name}\n\`\`\`\n${u.code}\n\`\`\``).join('\n')}\n`
+        : ''
+
+      return `---
+
+## Target ${i + 1}/${targetFns.length}: ${fn.functionName} (file: ${fn.filePath})
+${callerLine ? callerLine + '\n' : ''}${calleeLine ? calleeLine + '\n' : ''}\`\`\`
+${code}
+\`\`\`${existingSection}${uniqueSection}`
+    }).join('\n')
+
+    const prompt = stablePrefix + sharedSection + callGraphSection + functionSections
+
+    // 6. Call AI
+    const appConfig = loadConfig()
+    const aiConfig = config.ai_provider || config.model
+      ? { ...appConfig.ai, ...(config.ai_provider ? { provider: config.ai_provider } : {}), ...(config.model ? { model: config.model } : {}) }
+      : appConfig.ai
+    ai = createAIProvider(aiConfig as any)
+
+    const raw = await ai.call(prompt, { timeoutMs: config.timeout_ms, onRetry, onRateLimit })
+
+    // 7. Parse and distribute results (same logic as analyzeFunctionBatch)
+    const rawDecisions = parseJsonSafe<(ExtractedDecision & { file?: string })[]>(raw, [])
+    const allowedTypes = new Set(config.finding_types)
+    const now = new Date().toISOString()
+    const owner = 'dashboard'
+
+    const resultMap = new Map<string, PendingDecisionOutput[]>()
+    for (const fn of targetFns) {
+      resultMap.set(`${fn.filePath}::${fn.functionName}`, [])
+    }
+
+    if (Array.isArray(rawDecisions)) {
+      for (const d of rawDecisions) {
+        if (!d || !d.function || !d.summary || !d.content) continue
+        if (!allowedTypes.has(d.finding_type ?? 'decision')) continue
+
+        const file = d.file ?? targetFns.find(f => f.functionName === d.function)?.filePath ?? targetFns[0].filePath
+        const key = `${file}::${d.function}`
+        const altKey = [...resultMap.keys()].find(k => k.endsWith(`::${d.function}`))
+        const targetKey = resultMap.has(key) ? key : (altKey ?? key)
+
+        if (!resultMap.has(targetKey)) continue
+
+        const filePath = targetKey.split('::')[0]
+        const pathSlug = filePath.replace(/\//g, '_').replace(/\.[^.]+$/, '')
+        const findingType = ['decision', 'suboptimal', 'bug'].includes(d.finding_type) ? d.finding_type : 'decision'
+        const idx = resultMap.get(targetKey)!.length
+
+        resultMap.get(targetKey)!.push({
+          id: `dc:af:${repo}:${pathSlug}:${d.function}:${Date.now()}-${idx}`,
+          props: {
+            summary: String(d.summary),
+            content: String(d.content),
+            keywords: Array.isArray(d.keywords) ? d.keywords : [],
+            scope: [repo],
+            owner,
+            session_id: `analyze-chain-${now.slice(0, 10)}`,
+            commit_hash: 'analyze-function',
+            source: 'analyze_function',
+            confidence: 'auto_generated',
+            staleness: 'active',
+            finding_type: findingType,
+            ...(d.critique && findingType !== 'decision' ? { critique: String(d.critique) } : {}),
+            created_at: now,
+            updated_at: now,
+          },
+          functionName: String(d.function),
+          relatedFunctions: Array.isArray(d.related_functions) ? d.related_functions.map(String) : [],
+          filePath,
+          fileName: path.basename(filePath),
+          repo,
+        })
+      }
+    }
+
+    // 8. Build results
+    const results: AnalyzeFunctionResult[] = targetFns.map(fn => {
+      const key = `${fn.filePath}::${fn.functionName}`
+      const decisions = resultMap.get(key) ?? []
+      return {
+        functionName: fn.functionName,
+        filePath: fn.filePath,
+        repo,
+        decisions,
+        metadata: {
+          template_used: resolvedTemplateName,
+          config_snapshot: configOverrides ?? {},
+          caller_count: (perTargetCallerKeys.get(key) ?? []).length,
+          callee_count: (perTargetCalleeKeys.get(key) ?? []).length,
+          token_usage: ai!.lastUsage,
+          duration_ms: Date.now() - startTime,
+        },
+      }
+    })
+
+    const estimatedTokensSaved = dedupedReferences * 800 // ~800 tokens per deduped snippet
+
+    return {
+      results,
+      metadata: {
+        token_usage: ai.lastUsage,
+        duration_ms: Date.now() - startTime,
+        batch_size: targetFns.length,
+      },
+      targetKeys: [...targetKeys],
+      contextOnlyKeys: [...batch.contextOnlyKeys],
+      tokenSavings: {
+        sharedSnippetCount: sharedContext.length,
+        dedupedReferences,
+        estimatedTokensSaved,
+      },
+    }
+  } finally {
+    ai?.cleanup()
   }
 }

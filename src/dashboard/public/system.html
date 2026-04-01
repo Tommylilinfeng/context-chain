@@ -54,7 +54,7 @@
         <div style="margin-bottom:12px">
           <label style="display:block;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Path</label>
           <div style="display:flex;gap:8px">
-            <input type="text" id="repoPath" placeholder="/absolute/path/to/repo" style="flex:1;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
+            <input type="text" id="repoPath" placeholder="/absolute/path/to/repo" onchange="detectSrcDir()" onblur="detectSrcDir()" style="flex:1;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
             <button class="btn-primary" onclick="openBrowseModal()" style="white-space:nowrap;padding:8px 16px;width:auto;min-width:80px">Browse…</button>
           </div>
           <!-- Browse modal -->
@@ -90,8 +90,9 @@
             </select>
           </div>
           <div>
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Source Dir <span style="font-weight:400;text-transform:none">(default: src)</span></label>
-            <input type="text" id="repoSrcDir" placeholder="src" style="width:100%;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
+            <label style="display:block;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Source Dir <span style="font-weight:400;text-transform:none">(auto-detected)</span></label>
+            <input type="text" id="repoSrcDir" placeholder="Detecting..." style="width:100%;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);font-size:13px;outline:none">
+            <div id="srcDirHint" style="font-size:11px;margin-top:4px;min-height:16px"></div>
           </div>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
@@ -136,6 +137,27 @@
     </div>
 
     <div class="card mb-6">
+      <div class="card-head"><h3>Quota Tracking</h3><span class="badge" id="quotaBadge" style="background:var(--surface-2);color:var(--text-dim)">—</span></div>
+      <div class="card-body">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button class="btn-ghost" id="quotaToggleBtn" onclick="toggleQuotaTracking()" style="min-width:120px">Loading...</button>
+          <span id="quotaStatus" style="font-size:12px;color:var(--text-dim)"></span>
+        </div>
+        <div id="quotaInfo" style="display:none;margin-top:12px;padding:10px 14px;background:var(--surface-1);border-radius:var(--radius-sm);font-family:var(--mono);font-size:13px">
+          <div style="display:flex;gap:24px">
+            <div><span style="color:var(--text-dim)">5h:</span> <span id="quota5h">—</span></div>
+            <div><span style="color:var(--text-dim)">7d:</span> <span id="quota7d">—</span></div>
+            <div><span style="color:var(--text-dim)">Age:</span> <span id="quotaAge">—</span></div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.5">
+          Configures Claude Code statusline to write precise rate limit % to a local file.<br>
+          Requires an open Claude Code interactive session to update. Without it, the pacer falls back to status-based throttling (allowed → warning → rejected).
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-6">
       <div class="card-head"><h3>Actions</h3></div>
       <div class="card-body">
         <div class="action-btns">
@@ -144,6 +166,7 @@
           <button class="btn-ghost" onclick="runSetup('ingest-all')">Ingest CPG</button>
           <button class="btn-ghost" onclick="runSetup('link-all')">Link Repos</button>
           <button class="btn-danger" onclick="if(confirm('Delete ALL decisions?'))runSetup('clear-decisions')">Clear Decisions</button>
+          <button class="btn-danger" onclick="if(confirm('This will DELETE ALL data in Memgraph (nodes, edges, everything). Continue?'))runSetup('nuke-db')">Nuke DB</button>
         </div>
         <div style="font-size:12px;color:var(--text-dim);margin-top:10px">
           Full Setup = Schema + Ingest all CPG files + Link repos &amp; services
@@ -187,7 +210,7 @@ async function loadSystem(){
       document.getElementById('cfgBadge').className='badge badge-green'
       document.getElementById('cfgBadge').textContent=s.config.repos.length+' repos'
       document.getElementById('cfgInfo').innerHTML=s.config.repos.map(r=>
-        `<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span class="dot ${r.cpgExists?'dot-green':'dot-red'}"></span><span>${esc(r.name)}</span><span class="badge" style="background:var(--surface-2);color:var(--text-dim)">${r.type}</span>${r.cpgExists?'<span style="color:var(--green);font-size:11px">CPG ready</span><button class="btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" onclick="generateCpg(\''+esc(r.name)+'\')">↻ Regenerate</button>':`<span style="color:var(--red);font-size:11px">CPG missing</span><button class="btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" onclick="generateCpg('${esc(r.name)}')">Generate CPG</button>`}<span style="font-size:11px;color:var(--text-dim)">${esc(r.language||'js')} · ${esc(r.srcDir||'src')}</span></div>`
+        `<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span class="dot ${r.cpgExists?'dot-green':'dot-red'}"></span><span>${esc(r.name)}</span><span class="badge" style="background:var(--surface-2);color:var(--text-dim)">${r.type}</span>${r.cpgExists?'<span style="color:var(--green);font-size:11px">CPG ready</span><button class="btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" onclick="generateCpg(\''+esc(r.name)+'\')">↻ Regenerate</button>':`<span style="color:var(--red);font-size:11px">CPG missing</span><button class="btn-ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" onclick="generateCpg('${esc(r.name)}')">Generate CPG</button>`}<span style="font-size:11px;color:var(--text-dim)">${esc(r.language||'js')} · ${esc(r.srcDir==='.'?'(repo root)':r.srcDir||'src')}</span><button class="btn-ghost" style="padding:2px 6px;font-size:11px;color:var(--red);border-color:transparent;margin-left:auto" onclick="deleteRepo('${esc(r.name)}')" title="Delete repo, CPG files, and graph data">✕</button></div>`
       ).join('')
     } else {
       document.getElementById('cfgBadge').className='badge badge-red'
@@ -254,6 +277,41 @@ function toggleAddRepo() {
   document.getElementById('addRepoMsg').textContent = ''
 }
 
+let _detectDebounce = null
+async function detectSrcDir() {
+  const repoPath = document.getElementById('repoPath').value.trim()
+  const hint = document.getElementById('srcDirHint')
+  const srcDirInput = document.getElementById('repoSrcDir')
+  if (!repoPath) { hint.innerHTML = ''; return }
+
+  clearTimeout(_detectDebounce)
+  _detectDebounce = setTimeout(async () => {
+    hint.innerHTML = '<span style="color:var(--text-dim)">Detecting...</span>'
+    try {
+      const res = await fetch('/api/repos/detect-src', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        hint.innerHTML = `<span style="color:var(--red)">${data.error}</span>`
+        return
+      }
+      if (data.srcDir !== null) {
+        srcDirInput.value = data.srcDir
+        hint.innerHTML = `<span style="color:var(--green)">${data.explanation}</span>`
+      } else {
+        srcDirInput.value = ''
+        srcDirInput.placeholder = 'e.g. src, packages, lib, or .'
+        hint.innerHTML = `<span style="color:var(--yellow,orange)">${data.explanation}</span>`
+      }
+    } catch (e) {
+      hint.innerHTML = `<span style="color:var(--red)">${e.message}</span>`
+    }
+  }, 300)
+}
+
 async function addRepo() {
   const name = document.getElementById('repoName').value.trim()
   const repoPath = document.getElementById('repoPath').value.trim()
@@ -262,7 +320,7 @@ async function addRepo() {
   const packagesRaw = document.getElementById('repoPackages').value.trim()
   const packages = packagesRaw ? packagesRaw.split(',').map(s => s.trim()).filter(Boolean) : []
   const language = document.getElementById('repoLanguage').value
-  const srcDir = document.getElementById('repoSrcDir').value.trim() || 'src'
+  const srcDir = document.getElementById('repoSrcDir').value.trim() || undefined
   const msg = document.getElementById('addRepoMsg')
 
   if (!name || !repoPath) {
@@ -297,7 +355,7 @@ async function addRepo() {
 }
 
 async function deleteRepo(name) {
-  if (!confirm('Remove "' + name + '" from config?')) return
+  if (!confirm('Remove "' + name + '"? This will delete its config, CPG files, and graph data.')) return
   try {
     const res = await fetch('/api/repos/' + encodeURIComponent(name), { method: 'DELETE' })
     const data = await res.json()
@@ -383,6 +441,7 @@ function closeBrowseModal() {
 function selectBrowsePath() {
   document.getElementById('repoPath').value = browseCurrentPath
   closeBrowseModal()
+  detectSrcDir()
 }
 
 async function browseTo(dirPath) {
@@ -422,6 +481,68 @@ function browseUp() {
 }
 
 loadSystem()
+
+// ── Quota Tracking ──
+let _quotaEnabled = false
+
+async function loadQuotaStatus() {
+  try {
+    const res = await fetch('/api/system/quota-tracking')
+    const data = await res.json()
+    _quotaEnabled = data.enabled
+    const btn = document.getElementById('quotaToggleBtn')
+    const badge = document.getElementById('quotaBadge')
+    const status = document.getElementById('quotaStatus')
+    const info = document.getElementById('quotaInfo')
+
+    btn.textContent = data.enabled ? 'Disable' : 'Enable'
+    btn.className = data.enabled ? 'btn-danger' : 'btn-primary'
+    btn.style.minWidth = '120px'
+    badge.textContent = data.enabled ? 'enabled' : 'disabled'
+    badge.style.background = data.enabled ? 'rgba(52,210,123,0.15)' : 'var(--surface-2)'
+    badge.style.color = data.enabled ? 'var(--green)' : 'var(--text-dim)'
+
+    if (data.rateLimits) {
+      info.style.display = 'block'
+      const h5 = data.rateLimits.five_hour?.used_percentage
+      const d7 = data.rateLimits.seven_day?.used_percentage
+      document.getElementById('quota5h').textContent = h5 != null ? h5.toFixed(0) + '%' : '—'
+      document.getElementById('quota5h').style.color = h5 > 80 ? 'var(--red)' : h5 > 50 ? 'orange' : 'var(--green)'
+      document.getElementById('quota7d').textContent = d7 != null ? d7.toFixed(0) + '%' : '—'
+      document.getElementById('quota7d').style.color = d7 > 80 ? 'var(--red)' : d7 > 50 ? 'orange' : 'var(--green)'
+      document.getElementById('quotaAge').textContent = data.rateLimits.ageSec + 's ago'
+      status.textContent = 'Live data from Claude Code session'
+      status.style.color = 'var(--green)'
+    } else if (data.enabled) {
+      info.style.display = 'none'
+      status.textContent = 'Enabled — waiting for Claude Code session to write data'
+      status.style.color = 'var(--text-dim)'
+    } else {
+      info.style.display = 'none'
+      status.textContent = ''
+    }
+  } catch {
+    document.getElementById('quotaToggleBtn').textContent = 'Error'
+  }
+}
+
+async function toggleQuotaTracking() {
+  const btn = document.getElementById('quotaToggleBtn')
+  btn.disabled = true
+  btn.textContent = '...'
+  try {
+    const endpoint = _quotaEnabled ? '/api/system/quota-tracking/disable' : '/api/system/quota-tracking/enable'
+    const res = await fetch(endpoint, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      alert(data.error || 'Failed')
+    }
+  } catch (e) { alert(e.message) }
+  btn.disabled = false
+  loadQuotaStatus()
+}
+
+loadQuotaStatus()
 </script>
 </body>
 </html>

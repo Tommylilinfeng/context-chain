@@ -12,7 +12,7 @@ Existing context engineering tools (OpenSpec, Git-AI, Dexicon) capture knowledge
 
 ```
 Codebase → Joern CPG → LLM extracts decisions per function
-    → Memgraph (graph DB) → MCP Server (9 tools)
+    → Memgraph (graph DB) → MCP Server
         → Claude Code queries context while you code
 ```
 
@@ -126,6 +126,22 @@ npm run analyze -- --repo my-repo --continue                  # resume interrupt
 ```
 
 Configuration dimensions: context depth (caller/callee hops), code granularity (full/truncated/signature), output control (finding types, max decisions, language), prompt templates, AI provider.
+
+### Chain Analysis
+
+When running bulk analysis with batch size > 1, Chain Analysis groups related functions by their CALLS edges in the graph rather than processing them in arbitrary order.
+
+**How it works:**
+1. **Greedy set cover** selects center functions that maximize coverage of the call graph
+2. Each center + its direct callers/callees become one batch (targets)
+3. Second-level callers/callees are loaded as context-only (not analyzed, but visible to the LLM)
+4. Shared context is deduplicated — if two targets share a caller, its code appears once in the prompt
+5. Existing decisions for already-analyzed functions are fed as context
+6. Orphan functions with no CALLS edges fall back to linear batching
+
+**Benefits:** 30-50% token savings on tightly-coupled modules. The LLM sees related functions together, producing more coherent cross-function decisions and fewer contradictions. Context window overflow is handled automatically by trimming batches.
+
+Enable in Dashboard: **Run** → toggle **Chain Analysis** on.
 
 ### MCP Server
 

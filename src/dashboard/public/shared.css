@@ -79,7 +79,7 @@ body {
   margin-top: 5px;
   line-height: 1.5;
 }
-.sidebar-nav { padding: 14px 8px; flex: 1; }
+.sidebar-nav { padding: 14px 8px; flex: 1; overflow-y: auto; min-height: 0; }
 .sidebar-section {
   font-size: 10px;
   font-weight: 700;
