@@ -40,30 +40,49 @@ export class AnthropicAPIProvider implements AIProvider {
 
   async call(prompt: string, options?: AIProviderOptions): Promise<string> {
     const timeoutMs = options?.timeoutMs ?? 120000
+    const maxRetries = 5
+    let lastError: Error | null = null
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-    try {
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_tokens: this.maxTokens,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        signal: controller.signal,
-      })
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: this.model,
+            max_tokens: this.maxTokens,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: controller.signal,
+        })
 
-      if (!response.ok) {
-        const body = await response.text()
-        throw new Error(`Anthropic API ${response.status}: ${body}`)
-      }
+        if (!response.ok) {
+          const body = await response.text()
+          const status = response.status
+
+          // 429 (rate limit) or 529 (overloaded): retry with backoff
+          if ((status === 429 || status === 529) && attempt < maxRetries) {
+            clearTimeout(timer)
+            const retryAfter = response.headers.get('retry-after')
+            const waitSec = retryAfter ? parseInt(retryAfter) : Math.min(2 ** attempt * 2, 60)
+            const jitter = Math.random() * 1000
+            const totalWait = Math.round(waitSec + jitter / 1000)
+            console.log(`[rate-limit] ${status} on attempt ${attempt + 1}/${maxRetries + 1}, waiting ${totalWait}s`)
+            options?.onRetry?.({ status, attempt: attempt + 1, maxRetries: maxRetries + 1, waitSec: totalWait })
+            await new Promise(r => setTimeout(r, waitSec * 1000 + jitter))
+            lastError = new Error(`Anthropic API ${status}: ${body}`)
+            continue
+          }
+
+          throw new Error(`Anthropic API ${status}: ${body}`)
+        }
 
       // 解析 rate limit headers
       this.rateLimit = {
@@ -114,8 +133,12 @@ export class AnthropicAPIProvider implements AIProvider {
       // 跟 claude-cli 保持一致：去掉 markdown code fence
       const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
       return cleaned
-    } finally {
-      clearTimeout(timer)
+      } finally {
+        clearTimeout(timer)
+      }
     }
+
+    // All retries exhausted
+    throw lastError ?? new Error('Anthropic API: max retries exceeded')
   }
 }

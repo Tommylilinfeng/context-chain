@@ -1,0 +1,53 @@
+# Multi-project example: two Memgraph instances on different ports.
+#
+# Usage:
+#   docker compose -f docker-compose.multi-project.yml up -d
+#
+# Then configure each project's ckg.config.json:
+#   Project A: "memgraph": { "port": 7687 }, "dashboard": { "port": 3001 }
+#   Project B: "memgraph": { "port": 7688 }, "dashboard": { "port": 3101 }
+
+services:
+  memgraph-a:
+    image: memgraph/memgraph-mage
+    container_name: ckg-memgraph-a
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    volumes:
+      - memgraph-data-a:/var/lib/memgraph
+      - memgraph-log-a:/var/log/memgraph
+    environment:
+      - MEMGRAPH_STORAGE_MODE=IN_MEMORY_TRANSACTIONAL
+    restart: unless-stopped
+
+  memgraph-b:
+    image: memgraph/memgraph-mage
+    container_name: ckg-memgraph-b
+    ports:
+      - "7688:7687"
+      - "7445:7444"
+    volumes:
+      - memgraph-data-b:/var/lib/memgraph
+      - memgraph-log-b:/var/log/memgraph
+    environment:
+      - MEMGRAPH_STORAGE_MODE=IN_MEMORY_TRANSACTIONAL
+    restart: unless-stopped
+
+  memgraph-lab:
+    image: memgraph/lab
+    container_name: ckg-memgraph-lab
+    ports:
+      - "3000:3000"
+    depends_on:
+      - memgraph-a
+    environment:
+      - QUICK_CONNECT_MG_HOST=memgraph-a
+      - QUICK_CONNECT_MG_PORT=7687
+    restart: unless-stopped
+
+volumes:
+  memgraph-data-a:
+  memgraph-log-a:
+  memgraph-data-b:
+  memgraph-log-b:

@@ -1,7 +1,7 @@
 /**
  * core/batch-grouping.ts
  *
- * 链式分析 (Chain Analysis) — 按调用关系分组的批量分析策略。
+ * 聚类分析 (Cluster Analysis) — 按调用关系分组的批量分析策略。
  *
  *   1. 贪心集合覆盖选中心函数（coverage 最大）
  *   2. 中心 + level-1 callers/callees 作为 target
@@ -25,14 +25,14 @@ export interface RelationshipBatch {
   internalEdges: { caller: string; callee: string }[]
   /** Which target keys have existing decisions (populated later) */
   existingDecisionKeys: Set<string>
-  mode: 'chain' | 'linear'
+  mode: 'cluster' | 'linear'
 }
 
 export interface BatchFormationStats {
   totalFunctions: number
-  chainBatches: number
+  clusterBatches: number
   linearBatches: number
-  chainFunctions: number
+  clusterFunctions: number
   orphanFunctions: number
   edgeCount: number
   avgDensity: number
@@ -137,9 +137,9 @@ function selectCenters(
   return { centers, orphans: [...uncovered] }
 }
 
-// ── Chain Batch Formation ────────────────────────────────
+// ── Cluster Batch Formation ──────────────────────────────
 
-function buildChainBatch(
+function buildClusterBatch(
   centerKey: FnKey,
   fnMap: Map<FnKey, BatchFunctionInput>,
   undirected: Map<FnKey, Set<FnKey>>,
@@ -187,13 +187,13 @@ function buildChainBatch(
     contextOnlyKeys,
     internalEdges,
     existingDecisionKeys: new Set(),
-    mode: 'chain',
+    mode: 'cluster',
   }
 }
 
 // ── Cost/Benefit Check ───────────────────────────────────
 
-function isChainWorthIt(
+function isClusterWorthIt(
   centerKey: FnKey,
   undirected: Map<FnKey, Set<FnKey>>,
   available: Set<FnKey>,
@@ -210,7 +210,7 @@ function isChainWorthIt(
 // ── Context Window Budget Check ──────────────────────────
 
 /**
- * Estimate token cost of a chain batch.
+ * Estimate token cost of a cluster batch.
  * If it exceeds maxTokens, trim level-1 targets and context-only until it fits.
  */
 function trimBatchToFit(
@@ -289,11 +289,11 @@ export async function buildRelationshipBatches(
 
   for (const centerKey of centers) {
     if (assigned.has(centerKey)) continue
-    if (!isChainWorthIt(centerKey, undirected, new Set(candidateKeys.filter(k => !assigned.has(k))))) {
+    if (!isClusterWorthIt(centerKey, undirected, new Set(candidateKeys.filter(k => !assigned.has(k))))) {
       continue
     }
 
-    const rawBatch = buildChainBatch(centerKey, fnMap, undirected, directed, edges, maxBatchSize, assigned)
+    const rawBatch = buildClusterBatch(centerKey, fnMap, undirected, directed, edges, maxBatchSize, assigned)
     if (!rawBatch || rawBatch.functions.length < 2) continue
 
     // Trim to fit context window
@@ -325,17 +325,17 @@ export async function buildRelationshipBatches(
     }
   }
 
-  const chainBatches = batches.filter(b => b.mode === 'chain').length
+  const clusterBatches = batches.filter(b => b.mode === 'cluster').length
   const linearBatches = batches.filter(b => b.mode === 'linear').length
-  const chainFunctions = batches.filter(b => b.mode === 'chain').reduce((s, b) => s + b.functions.length, 0)
+  const clusterFunctions = batches.filter(b => b.mode === 'cluster').reduce((s, b) => s + b.functions.length, 0)
 
   return {
     batches,
     stats: {
       totalFunctions: functions.length,
-      chainBatches,
+      clusterBatches,
       linearBatches,
-      chainFunctions,
+      clusterFunctions,
       orphanFunctions: unassigned.length,
       edgeCount,
       avgDensity: functions.length > 0 ? edgeCount / functions.length : 0,

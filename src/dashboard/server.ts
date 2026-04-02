@@ -10,7 +10,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { getSession, verifyConnectivity } from '../db/client'
-import { loadConfig, clearConfigCache, getAnalysisConfig } from '../config'
+import { loadConfig, clearConfigCache, getAnalysisConfig, getProjectId } from '../config'
 import { spawn, ChildProcess } from 'child_process'
 import { createHash } from 'crypto'
 import fs from 'fs'
@@ -46,7 +46,7 @@ import {
   getFilesFromGraph, getBusinessContext, buildCallerCalleeCodes,
   batchWriteDecisions,
 } from '../ingestion/shared'
-import { analyzeFunction, analyzeFunctionBatch, analyzeChainBatch } from '../core/analyze-function'
+import { analyzeFunction, analyzeFunctionBatch, analyzeClusterBatch } from '../core/analyze-function'
 import { buildRelationshipBatches, type RelationshipBatch } from '../core/batch-grouping'
 import {
   createPendingEdges, connectDecisions, getPendingStatus,
@@ -908,67 +908,121 @@ app.post('/api/coverage/analyze-function', async (c) => {
 
 // ── API: 决策搜索 ───────────────────────────────────────
 
+function mapDecisionRecord(r: any) {
+  const d = r.get('d').properties
+  const rawAnchors: any[] = r.get('anchors') ?? []
+  return {
+    id: d.id,
+    summary: d.summary,
+    content: d.content,
+    summary_zh: d.summary_zh || null,
+    content_zh: d.content_zh || null,
+    localized_at: d.localized_at || null,
+    keywords: d.keywords,
+    source: d.source,
+    confidence: d.confidence,
+    finding_type: d.finding_type || 'decision',
+    critique: d.critique || null,
+    staleness: d.staleness || 'active',
+    owner: d.owner,
+    created_at: d.created_at,
+    scope: d.scope,
+    anchors: rawAnchors.filter((n: any) => n != null),
+  }
+}
+
 app.get('/api/decisions', async (c) => {
   const repo = c.req.query('repo')
   const q = c.req.query('q')
+  const type = c.req.query('type')        // finding_type filter
+  const page = c.req.query('page')         // pagination
+  const size = parseInt(c.req.query('size') ?? '50')
   const limit = parseInt(c.req.query('limit') ?? '50')
 
   const session = await getSession()
   try {
-    // 第一步：查决策节点（用字符串拼接 LIMIT，Memgraph 可能不支持参数化 LIMIT）
-    let result
-    if (repo && q) {
-      result = await session.run(
-        `MATCH (d:DecisionContext) WHERE ANY(s IN d.scope WHERE s = $repo) AND (d.summary CONTAINS $q OR d.content CONTAINS $q) RETURN d ORDER BY d.created_at DESC LIMIT ${limit}`,
-        { repo, q }
+    // Build WHERE clause dynamically
+    const conditions: string[] = []
+    const params: Record<string, any> = {}
+    if (repo) { conditions.push('ANY(s IN d.scope WHERE s = $repo)'); params.repo = repo }
+    if (q) { conditions.push('(d.summary CONTAINS $q OR d.content CONTAINS $q)'); params.q = q }
+    if (type) { conditions.push('d.finding_type = $type'); params.type = type }
+    const whereClause = conditions.length > 0 ? ' WHERE ' + conditions.join(' AND ') : ''
+
+    // Paginated mode (when page param present)
+    if (page) {
+      const pageNum = Math.max(1, parseInt(page))
+      const skip = (pageNum - 1) * size
+
+      // Count query
+      const countResult = await session.run(
+        `MATCH (d:DecisionContext)${whereClause} RETURN count(d) AS total`, params
       )
-    } else if (repo) {
-      result = await session.run(
-        `MATCH (d:DecisionContext) WHERE ANY(s IN d.scope WHERE s = $repo) RETURN d ORDER BY d.created_at DESC LIMIT ${limit}`,
-        { repo }
+      const total = countResult.records[0]?.get('total')?.toNumber?.() ?? countResult.records[0]?.get('total') ?? 0
+
+      // Data query — single query with OPTIONAL MATCH for anchors
+      const result = await session.run(
+        `MATCH (d:DecisionContext)${whereClause}
+         OPTIONAL MATCH (d)-[:ANCHORED_TO]->(ce:CodeEntity)
+         RETURN d, collect(DISTINCT ce.name) AS anchors
+         ORDER BY d.created_at DESC SKIP ${skip} LIMIT ${size}`, params
       )
-    } else if (q) {
-      result = await session.run(
-        `MATCH (d:DecisionContext) WHERE d.summary CONTAINS $q OR d.content CONTAINS $q RETURN d ORDER BY d.created_at DESC LIMIT ${limit}`,
-        { q }
-      )
-    } else {
-      result = await session.run(
-        `MATCH (d:DecisionContext) RETURN d ORDER BY d.created_at DESC LIMIT ${limit}`
-      )
+
+      const data = result.records.map(r => mapDecisionRecord(r))
+      const pages = Math.ceil(total / size)
+      return c.json({ data, total, page: pageNum, size, pages })
     }
 
-    // 第二步：对每条决策查锚点
-    const decisions = []
-    for (const r of result.records) {
-      const d = r.get('d').properties
-      const anchorResult = await session.run(
-        `MATCH (d:DecisionContext {id: $id})-[:ANCHORED_TO]->(ce:CodeEntity) RETURN ce.name AS name`,
-        { id: d.id }
-      )
-      decisions.push({
-        id: d.id,
-        summary: d.summary,
-        content: d.content,
-        summary_zh: d.summary_zh || null,
-        content_zh: d.content_zh || null,
-        localized_at: d.localized_at || null,
-        keywords: d.keywords,
-        source: d.source,
-        confidence: d.confidence,
-        finding_type: d.finding_type || 'decision',
-        critique: d.critique || null,
-        staleness: d.staleness || 'active',
-        owner: d.owner,
-        created_at: d.created_at,
-        scope: d.scope,
-        anchors: anchorResult.records.map(ar => ar.get('name')),
-      })
-    }
+    // Legacy mode (no page param) — backwards compatible bare array
+    const result = await session.run(
+      `MATCH (d:DecisionContext)${whereClause}
+       OPTIONAL MATCH (d)-[:ANCHORED_TO]->(ce:CodeEntity)
+       RETURN d, collect(DISTINCT ce.name) AS anchors
+       ORDER BY d.created_at DESC LIMIT ${limit}`, params
+    )
 
+    const decisions = result.records.map(r => mapDecisionRecord(r))
     return c.json(decisions)
   } catch (err: any) {
     console.error('GET /api/decisions error:', err.message)
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// ── API: Decision Stats (lightweight, for sidebar) ────────
+
+app.get('/api/decisions/stats', async (c) => {
+  const repo = c.req.query('repo')
+  const session = await getSession()
+  try {
+    const whereClause = repo ? ' WHERE ANY(s IN d.scope WHERE s = $repo)' : ''
+    const params = repo ? { repo } : {}
+    const result = await session.run(
+      `MATCH (d:DecisionContext)${whereClause}
+       RETURN d.finding_type AS type, d.keywords AS kw, d.staleness AS staleness`, params
+    )
+
+    const typeCounts: Record<string, number> = {}
+    const keywordCounts: Record<string, number> = {}
+    const stalenessCounts: Record<string, number> = {}
+    let total = 0
+
+    for (const r of result.records) {
+      total++
+      const ft = r.get('type') || 'decision'
+      typeCounts[ft] = (typeCounts[ft] || 0) + 1
+      const st = r.get('staleness') || 'active'
+      stalenessCounts[st] = (stalenessCounts[st] || 0) + 1
+      const kws: string[] = r.get('kw') || []
+      for (const k of kws) {
+        keywordCounts[k] = (keywordCounts[k] || 0) + 1
+      }
+    }
+
+    return c.json({ total, typeCounts, keywordCounts, stalenessCounts })
+  } catch (err: any) {
     return c.json({ error: err.message }, 500)
   } finally {
     await session.close()
@@ -1968,12 +2022,21 @@ const MAX_LOG_ENTRIES = 2000
 class LogBuffer {
   private entries: { seq: number; data: string }[] = []
   private nextSeq = 0
+  private logFile: string | null = null
+  private lastPersistedSeq = -1
+  private persistTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Bind this buffer to a JSONL file for persistence. */
+  bindFile(filePath: string): void {
+    this.logFile = filePath
+  }
 
   push(data: string): void {
     this.entries.push({ seq: this.nextSeq++, data })
     if (this.entries.length > MAX_LOG_ENTRIES) {
       this.entries.splice(0, this.entries.length - MAX_LOG_ENTRIES)
     }
+    this.schedulePersist()
   }
 
   /** Read entries after the given sequence number. Returns [entries, newLastSeq]. */
@@ -1994,12 +2057,116 @@ class LogBuffer {
   clear(): void {
     this.entries = []
     // don't reset nextSeq — ensures old readers can't confuse new logs with old
+    // Truncate log file
+    if (this.logFile) {
+      try { fs.writeFileSync(this.logFile, '') } catch {}
+    }
+    this.lastPersistedSeq = this.nextSeq - 1
+  }
+
+  /** Flush new entries to JSONL file. */
+  private schedulePersist(): void {
+    if (!this.logFile || this.persistTimer) return
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      this.flushToDisk()
+    }, 500)
+  }
+
+  private flushToDisk(): void {
+    if (!this.logFile) return
+    const newEntries = this.entries.filter(e => e.seq > this.lastPersistedSeq)
+    if (newEntries.length === 0) return
+    try {
+      const lines = newEntries.map(e => JSON.stringify({ seq: e.seq, data: e.data })).join('\n') + '\n'
+      fs.appendFileSync(this.logFile, lines)
+      this.lastPersistedSeq = newEntries[newEntries.length - 1].seq
+    } catch {}
+  }
+
+  /** Force flush (call before exit). */
+  flush(): void {
+    if (this.persistTimer) { clearTimeout(this.persistTimer); this.persistTimer = null }
+    this.flushToDisk()
+  }
+
+  /** Restore from JSONL file. */
+  static restore(filePath: string): LogBuffer {
+    const buf = new LogBuffer()
+    buf.logFile = filePath
+    try {
+      if (fs.existsSync(filePath)) {
+        const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(Boolean)
+        for (const line of lines.slice(-MAX_LOG_ENTRIES)) {
+          try {
+            const { seq, data } = JSON.parse(line)
+            buf.entries.push({ seq, data })
+            if (seq >= buf.nextSeq) buf.nextSeq = seq + 1
+          } catch {}
+        }
+        buf.lastPersistedSeq = buf.nextSeq - 1
+      }
+    } catch {}
+    return buf
   }
 }
 
 /** Legacy helper — pushLog still works but now delegates to LogBuffer */
 function pushLog(buf: LogBuffer, entry: string): void {
   buf.push(entry)
+}
+
+// ── Job State Persistence ───────────────────────────────
+
+const JOB_STATE_DIR = path.resolve(__dirname, '../../data')
+
+function jobStatePath(jobName: string): string {
+  return path.join(JOB_STATE_DIR, `dashboard-${jobName}-state.json`)
+}
+
+function jobLogPath(jobName: string): string {
+  return path.join(JOB_STATE_DIR, `dashboard-${jobName}-logs.jsonl`)
+}
+
+function saveJobState(jobName: string, state: Record<string, any>): void {
+  try {
+    if (!fs.existsSync(JOB_STATE_DIR)) fs.mkdirSync(JOB_STATE_DIR, { recursive: true })
+    fs.writeFileSync(jobStatePath(jobName), JSON.stringify(state))
+  } catch {}
+}
+
+function loadJobState(jobName: string): Record<string, any> | null {
+  try {
+    const p = jobStatePath(jobName)
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'))
+  } catch {}
+  return null
+}
+
+function persistRunJob(): void {
+  saveJobState('run', {
+    status: runJob.status, repo: runJob.repo,
+    analyzed: runJob.analyzed, decisions: runJob.decisions,
+    total: runJob.total, skipped: runJob.skipped, startedAt: runJob.startedAt,
+  })
+  runJob.logs.flush()
+}
+
+// Restore run job from disk on startup
+function restoreRunJob(): void {
+  const saved = loadJobState('run')
+  if (!saved) return
+  // If it was running when we crashed, mark as interrupted
+  if (saved.status === 'running') saved.status = 'interrupted'
+  runJob.status = saved.status || 'idle'
+  runJob.repo = saved.repo || null
+  runJob.analyzed = saved.analyzed || 0
+  runJob.decisions = saved.decisions || 0
+  runJob.total = saved.total || 0
+  runJob.skipped = saved.skipped || 0
+  runJob.startedAt = saved.startedAt || 0
+  // Restore logs from JSONL
+  runJob.logs = LogBuffer.restore(jobLogPath('run'))
 }
 
 const runJob: RunJob = {
@@ -2075,7 +2242,7 @@ async function deleteOldDecisionsForFunction(
 }
 
 /** Core async analysis loop — runs in server process */
-async function runAnalysis(repo: string, concurrency: number, advancedConfig?: { advancedMode?: boolean; contextModules?: Record<string, boolean>; maxRounds?: number }, batchSize: number = 1, packageFilter?: string[], chainMode: boolean = false): Promise<void> {
+async function runAnalysis(repo: string, concurrency: number, advancedConfig?: { advancedMode?: boolean; contextModules?: Record<string, boolean>; maxRounds?: number }, batchSize: number = 1, packageFilter?: string[], clusterMode: boolean = false): Promise<void> {
   // Use a dedicated session only for initial queries; workers get their own sessions
   const initSession = await getSession()
   try {
@@ -2140,20 +2307,21 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
     if (remaining.length === 0) {
       pushLog(runJob.logs, 'All functions already analyzed. Use force mode to re-analyze.')
       runJob.status = 'done'
+      persistRunJob()
       return
     }
 
     // Group functions into batches
     type FnItem = typeof remaining[0]
     let relationshipBatches: RelationshipBatch[] = []
-    if (chainMode) {
+    if (clusterMode) {
       try {
-        pushLog(runJob.logs, `Chain Analysis enabled — grouping by call graph`)
+        pushLog(runJob.logs, `Cluster Analysis enabled — grouping by call graph`)
         const { batches: rBatches, stats } = await buildRelationshipBatches(
           initSession, remaining, repo, effectiveBatchSize
         )
         relationshipBatches = rBatches
-        pushLog(runJob.logs, `Batch formation: ${stats.totalFunctions} functions → ${stats.chainBatches} chain batches (${stats.chainFunctions} fns) + ${stats.linearBatches} linear batches (${stats.orphanFunctions} fns)`)
+        pushLog(runJob.logs, `Batch formation: ${stats.totalFunctions} functions → ${stats.clusterBatches} cluster batches (${stats.clusterFunctions} fns) + ${stats.linearBatches} linear batches (${stats.orphanFunctions} fns)`)
         pushLog(runJob.logs, `Graph: ${stats.edgeCount} CALLS edges, density=${stats.avgDensity.toFixed(2)} edges/fn`)
         if (stats.splitsDueToSize > 0) {
           pushLog(runJob.logs, `${stats.splitsDueToSize} batches trimmed to fit context window`)
@@ -2162,7 +2330,7 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           pushLog(runJob.logs, `Centers: ${stats.centersChosen.slice(0, 10).map(c => c.split('::')[1]).join(', ')}${stats.centersChosen.length > 10 ? ` +${stats.centersChosen.length - 10} more` : ''}`)
         }
       } catch (err: any) {
-        pushLog(runJob.logs, `Chain batching failed (${err.message}), falling back to linear`)
+        pushLog(runJob.logs, `Cluster batching failed (${err.message}), falling back to linear`)
       }
     }
 
@@ -2234,9 +2402,9 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           }
         }
 
-        if (batchMode === 'chain' && batch.length > 1) {
-          // ── Chain batch: relationship-aware analysis ──
-          const chainResult = await analyzeChainBatch(
+        if (batchMode === 'cluster' && batch.length > 1) {
+          // ── Cluster batch: relationship-aware analysis ──
+          const clusterResult = await analyzeClusterBatch(
             relBatch,
             repo,
             repoConfig.path,
@@ -2248,18 +2416,18 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           )
 
           // Track token savings
-          totalTokensSaved += chainResult.tokenSavings.estimatedTokensSaved
-          if (chainResult.tokenSavings.sharedSnippetCount > 0) {
+          totalTokensSaved += clusterResult.tokenSavings.estimatedTokensSaved
+          if (clusterResult.tokenSavings.sharedSnippetCount > 0) {
             pushLog(runJob.logs, JSON.stringify({
-              type: 'chain-stats', center: relBatch.centerKey?.split('::')[1],
-              sharedSnippets: chainResult.tokenSavings.sharedSnippetCount,
-              dedupedRefs: chainResult.tokenSavings.dedupedReferences,
-              estimatedSaved: chainResult.tokenSavings.estimatedTokensSaved,
+              type: 'cluster-stats', center: relBatch.centerKey?.split('::')[1],
+              sharedSnippets: clusterResult.tokenSavings.sharedSnippetCount,
+              dedupedRefs: clusterResult.tokenSavings.dedupedReferences,
+              estimatedSaved: clusterResult.tokenSavings.estimatedTokensSaved,
             }))
           }
 
           // Process results for each function
-          const batchTokens = chainResult.metadata.token_usage
+          const batchTokens = clusterResult.metadata.token_usage
           const perFnInput = Math.round((batchTokens.input_tokens ?? 0) / batch.length)
           const perFnOutput = Math.round((batchTokens.output_tokens ?? 0) / batch.length)
 
@@ -2268,8 +2436,15 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
           historyRecord.cacheCreationTokens = (historyRecord.cacheCreationTokens ?? 0) + (batchTokens.cache_creation_input_tokens ?? 0)
           historyRecord.cacheReadTokens = (historyRecord.cacheReadTokens ?? 0) + (batchTokens.cache_read_input_tokens ?? 0)
 
-          for (let i = 0; i < chainResult.results.length; i++) {
-            const result = chainResult.results[i]
+          // Collect all decision IDs in this cluster batch — they were analyzed
+          // together so don't need PENDING_COMPARISON edges between each other
+          const allClusterDecisionIds: string[] = []
+          for (const r of clusterResult.results) {
+            for (const d of r.decisions) allClusterDecisionIds.push(d.id)
+          }
+
+          for (let i = 0; i < clusterResult.results.length; i++) {
+            const result = clusterResult.results[i]
             const fn = batch[i]
             const fnIdx = fnIndices[i]
             const decCount = result.decisions.length
@@ -2282,7 +2457,8 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
             if (decCount > 0) {
               await batchWriteDecisions(workerSession, result.decisions)
               const newIds = result.decisions.map(d => d.id)
-              await createPendingEdges(workerSession, newIds, { verbose: false })
+              // Skip PENDING edges between decisions in the same cluster batch
+              await createPendingEdges(workerSession, newIds, { verbose: false, excludeIds: allClusterDecisionIds })
             }
 
             if (fnIdx >= 0) {
@@ -2290,10 +2466,10 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
               runJob.functions[fnIdx].decisions = decCount
             }
 
-            const durSec = (chainResult.metadata.duration_ms / 1000).toFixed(1)
+            const durSec = (clusterResult.metadata.duration_ms / 1000).toFixed(1)
             pushLog(runJob.logs, JSON.stringify({
               type: 'function-done', name: fn.name, file: fn.filePath,
-              decisions: decCount, duration: durSec, index: fnIdx, mode: 'chain',
+              decisions: decCount, duration: durSec, index: fnIdx, mode: 'cluster',
             }))
 
             const fnRecord = createRunRecord('analyze', {
@@ -2302,7 +2478,7 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
               inputTokens: perFnInput, outputTokens: perFnOutput,
               decisionsCreated: decCount, functionsAnalyzed: 1,
             })
-            fnRecord.durationMs = chainResult.metadata.duration_ms
+            fnRecord.durationMs = clusterResult.metadata.duration_ms
             fnRecord.completedAt = new Date().toISOString()
             fnRecord.totalTokens = perFnInput + perFnOutput
             appendRunRecord(fnRecord)
@@ -2461,6 +2637,8 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
         type: 'progress', analyzed: runJob.analyzed, decisions: runJob.decisions,
         total: runJob.total, skipped: runJob.skipped,
       }))
+      // Persist state every 10 functions
+      if (runJob.analyzed % 10 === 0) persistRunJob()
     })
 
 
@@ -2473,15 +2651,17 @@ async function runAnalysis(repo: string, concurrency: number, advancedConfig?: {
       runJob.status = 'done'
       pushLog(runJob.logs, JSON.stringify({ type: 'done', analyzed: runJob.analyzed, decisions: runJob.decisions, estimatedTokensSaved: totalTokensSaved }))
       if (totalTokensSaved > 0) {
-        pushLog(runJob.logs, `Chain analysis dedup saved ~${totalTokensSaved.toLocaleString()} tokens across all batches`)
+        pushLog(runJob.logs, `Cluster analysis dedup saved ~${totalTokensSaved.toLocaleString()} tokens across all batches`)
       }
     }
+    persistRunJob()
 
     // Persist run history
     finalizeAndSave(historyRecord)
   } catch (err: any) {
     runJob.status = 'error'
     pushLog(runJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    persistRunJob()
     // Still save partial history
     historyRecord.errors++
     finalizeAndSave(historyRecord)
@@ -2509,7 +2689,7 @@ app.post('/api/run/start', async (c) => {
   }
 
   const body = await c.req.json()
-  const { repo, summaryWords, contentWords, concurrency = 2, batchSize = 1, chainMode = false, packages, advancedMode, contextModules, maxRounds } = body
+  const { repo, summaryWords, contentWords, concurrency = 2, batchSize = 1, clusterMode = false, packages, advancedMode, contextModules, maxRounds } = body
 
   if (!repo) return c.json({ error: 'repo is required' }, 400)
 
@@ -2542,6 +2722,7 @@ app.post('/api/run/start', async (c) => {
   runJob.status = 'running'
   runJob.repo = repo
   runJob.logs.clear()
+  runJob.logs.bindFile(jobLogPath('run'))
   runJob.functions = []
   runJob.analyzed = 0
   runJob.decisions = 0
@@ -2549,14 +2730,16 @@ app.post('/api/run/start', async (c) => {
   runJob.skipped = 0
   runJob.startedAt = Date.now()
   runJob.abortRequested = false
+  persistRunJob()
 
   // Kick off analysis (don't await)
   const advCfg = advancedMode ? { advancedMode, contextModules, maxRounds } : undefined
-  const clampedBatch = chainMode ? 8 : Math.max(1, Math.min(10, batchSize || 1))
+  const clampedBatch = clusterMode ? 8 : Math.max(1, Math.min(10, batchSize || 1))
   const pkgFilter = Array.isArray(packages) && packages.length > 0 ? packages : undefined
-  runAnalysis(repo, concurrency, advCfg, clampedBatch, pkgFilter, chainMode).catch(err => {
+  runAnalysis(repo, concurrency, advCfg, clampedBatch, pkgFilter, clusterMode).catch(err => {
     runJob.status = 'error'
     pushLog(runJob.logs,JSON.stringify({ type: 'error', error: err.message }))
+    persistRunJob()
   })
 
   return c.json({ status: 'started', repo })
@@ -2572,7 +2755,8 @@ app.post('/api/run/stop', (c) => {
 
 app.get('/api/run/stream', (c) => {
   return streamSSE(c, async (stream) => {
-    let lastSeq = -1
+    // Support resuming from a specific sequence (SSE reconnect)
+    let lastSeq = parseInt(c.req.query('lastSeq') ?? '-1')
     let done = false
 
     while (!done) {
@@ -2580,9 +2764,9 @@ app.get('/api/run/stream', (c) => {
       for (const line of entries) {
         try {
           const parsed = JSON.parse(line)
-          await stream.writeSSE({ data: line, event: parsed.type || 'log' })
+          await stream.writeSSE({ data: line, event: parsed.type || 'log', id: String(newSeq) })
         } catch {
-          await stream.writeSSE({ data: line, event: 'log' })
+          await stream.writeSSE({ data: line, event: 'log', id: String(newSeq) })
         }
       }
       lastSeq = newSeq
@@ -4152,41 +4336,94 @@ app.get('*', (c) => {
   return c.redirect('/overview')
 })
 
+// ── PID Lock ────────────────────────────────────────────
+
+const DATA_DIR = path.resolve(__dirname, '../../data')
+
+function getLockPath(): string {
+  const projectId = getProjectId()
+  return path.join(DATA_DIR, `.dashboard-${projectId}.pid`)
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+function acquireLock(port: number): void {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
+  const lockPath = getLockPath()
+
+  // Check existing lock
+  if (fs.existsSync(lockPath)) {
+    try {
+      const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'))
+      if (lock.pid && isProcessAlive(lock.pid)) {
+        console.log(`\n🖥️  Dashboard already running at http://localhost:${lock.port}`)
+        console.log(`   PID: ${lock.pid} (started ${lock.startedAt || 'unknown'})`)
+        console.log(`   To restart: kill ${lock.pid} && npm run dashboard\n`)
+        process.exit(0)
+      }
+      // Stale lock — process is dead, remove it
+      fs.unlinkSync(lockPath)
+    } catch {
+      // Corrupt lock file, remove it
+      try { fs.unlinkSync(lockPath) } catch {}
+    }
+  }
+
+  // Write new lock
+  fs.writeFileSync(lockPath, JSON.stringify({
+    pid: process.pid,
+    port,
+    startedAt: new Date().toISOString(),
+    project: getProjectId(),
+  }))
+}
+
+function releaseLock(): void {
+  try {
+    const lockPath = getLockPath()
+    if (fs.existsSync(lockPath)) {
+      const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'))
+      // Only remove if it's our lock
+      if (lock.pid === process.pid) fs.unlinkSync(lockPath)
+    }
+  } catch {}
+}
+
 // ── 启动 ────────────────────────────────────────────────
 
-const PREFERRED_PORT = parseInt(process.env.DASHBOARD_PORT ?? '3001')
-const MAX_PORT_ATTEMPTS = 10
-
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = require('net').createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => { server.close(); resolve(true) })
-    server.listen(port)
-  })
-}
-
-async function findAvailablePort(start: number): Promise<number> {
-  for (let port = start; port < start + MAX_PORT_ATTEMPTS; port++) {
-    if (await isPortAvailable(port)) return port
-  }
-  throw new Error(`No available port found in range ${start}–${start + MAX_PORT_ATTEMPTS - 1}`)
-}
+const _config = loadConfig()
+const PREFERRED_PORT = parseInt(process.env.DASHBOARD_PORT ?? String(_config.dashboard?.port ?? 3001))
 
 async function main() {
   await verifyConnectivity()
 
-  const port = await findAvailablePort(PREFERRED_PORT)
-  if (port !== PREFERRED_PORT) {
-    console.log(`⚠️  Port ${PREFERRED_PORT} is in use, using ${port} instead`)
-  }
+  // Restore job state from disk (handles crash recovery)
+  restoreRunJob()
 
-  serve({ fetch: app.fetch, port }, () => {
-    console.log(`\n🖥️  CKG Dashboard: http://localhost:${port}\n`)
+  // Acquire lock (exits if another instance is running for this project)
+  acquireLock(PREFERRED_PORT)
+
+  // Register cleanup
+  const cleanup = () => { runJob.logs.flush(); persistRunJob(); releaseLock(); process.exit(0) }
+  process.on('SIGINT', cleanup)
+  process.on('SIGTERM', cleanup)
+  process.on('exit', releaseLock)
+
+  serve({ fetch: app.fetch, port: PREFERRED_PORT }, () => {
+    console.log(`\n🖥️  CKG Dashboard: http://localhost:${PREFERRED_PORT}`)
+    console.log(`   Project: ${getProjectId()} | PID: ${process.pid}\n`)
   })
 }
 
 main().catch(err => {
+  releaseLock()
   console.error('Dashboard failed to start:', err.message)
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n   Port ${PREFERRED_PORT} is already in use.`)
+    console.error(`   Set a different port: DASHBOARD_PORT=3002 npm run dashboard`)
+    console.error(`   Or add to ckg.config.json: "dashboard": { "port": 3002 }\n`)
+  }
   process.exit(1)
 })

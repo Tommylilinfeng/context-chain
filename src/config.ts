@@ -34,6 +34,13 @@ export interface ProjectConfig {
   repos: RepoConfig[]
   ai?: AIConfig
   analysis?: AnalysisConfig
+  memgraph?: {
+    host?: string   // default: 'localhost'
+    port?: number   // default: 7687
+  }
+  dashboard?: {
+    port?: number   // default: 3001
+  }
 }
 
 const CONFIG_PATH = path.resolve(__dirname, '../ckg.config.json')
@@ -59,6 +66,15 @@ export function getAnalysisConfig(): AnalysisConfig {
 
 export function clearConfigCache(): void {
   _cache = null
+}
+
+/** Stable project identifier for lock files, state files, etc. */
+export function getProjectId(): string {
+  try {
+    const config = loadConfig()
+    if (config.project) return config.project
+  } catch {}
+  return path.basename(path.resolve(__dirname, '..'))
 }
 
 /**

@@ -27,9 +27,8 @@
 
   /* Batch config */
   .batch-config { display:flex; flex-direction:column; gap:10px; }
-  .slider-row { display:flex; align-items:center; gap:12px; }
-  .slider-row input[type="range"] { flex:1; accent-color:var(--accent); height:4px; }
-  .slider-value { font-family:var(--mono); font-size:14px; font-weight:700; color:var(--accent); min-width:32px; text-align:right; }
+  .batch-input-row { display:flex; align-items:center; gap:8px; }
+  .batch-input-row input[type="number"] { width:80px; padding:6px 8px; border:1px solid var(--border); border-radius:6px; background:var(--surface-2); color:var(--text); font-family:var(--mono); font-size:14px; font-weight:700; }
 
   /* Batch plan */
   .batch-plan { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px; }
@@ -145,9 +144,8 @@
       <!-- Batch size -->
       <div class="batch-config">
         <div class="section-title">Batch Size</div>
-        <div class="slider-row">
-          <input type="range" id="batchSlider" min="10" max="200" step="10" value="100">
-          <span class="slider-value" id="batchValue">100</span>
+        <div class="batch-input-row">
+          <input type="number" id="batchInput" min="2" step="1" value="200">
         </div>
         <div style="font-size:11px;color:var(--text-dim);">
           Decisions per batch. Half anchor (cached) + half rotate. Larger = fewer rounds.
@@ -226,18 +224,18 @@
 <script>
   // ── State ──
   let mode = 'summary'
-  let batchSize = 100
+  let batchSize = 200
   let stats = { pending: 0, total: 0, connected: 0, newDecisions: 0 }
   let eventSource = null
   let startTime = 0
 
-  const batchSlider = document.getElementById('batchSlider')
-  const batchValue = document.getElementById('batchValue')
+  const batchInput = document.getElementById('batchInput')
 
-  // ── Batch slider ──
-  batchSlider.addEventListener('input', () => {
-    batchSize = parseInt(batchSlider.value)
-    batchValue.textContent = batchSize
+  // ── Batch size input ──
+  batchInput.addEventListener('change', () => {
+    const v = parseInt(batchInput.value)
+    batchSize = v >= 2 ? v : 2
+    batchInput.value = batchSize
     updatePlan()
   })
 

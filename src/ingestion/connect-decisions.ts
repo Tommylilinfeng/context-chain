@@ -44,7 +44,7 @@ export interface ConnectDecisionsOptions {
   dbSession: Session
   ai: AIProvider
   budget?: BudgetManager | null
-  /** Max decision summaries per batch (default 50) */
+  /** Max decision summaries per batch (default 200, no upper limit) */
   batchCapacity?: number
   /** LLM concurrency (default 2) */
   concurrency?: number
@@ -156,10 +156,11 @@ export function computeBatchPlan(N: number, B: number, anchorOverride?: number):
 export async function createPendingEdges(
   session: Session,
   newDecisionIds: string[],
-  options?: { verbose?: boolean }
+  options?: { verbose?: boolean; excludeIds?: string[] }
 ): Promise<number> {
   if (newDecisionIds.length === 0) return 0
   const verbose = options?.verbose ?? true
+  const excludeIds = options?.excludeIds ?? []
   const now = new Date().toISOString()
 
   let totalCreated = 0
@@ -167,16 +168,18 @@ export async function createPendingEdges(
   for (const newId of newDecisionIds) {
     try {
       // Find all active decisions with no edge to newId
+      // excludeIds: skip PENDING edges between decisions already analyzed together (e.g. cluster batch)
+      const excludeFilter = excludeIds.length > 0 ? ' AND NOT existing.id IN $excludeIds' : ''
       const result = await session.run(
         `MATCH (new:DecisionContext {id: $newId})
          MATCH (existing:DecisionContext {staleness: 'active'})
-         WHERE existing.id <> $newId
+         WHERE existing.id <> $newId${excludeFilter}
            AND NOT EXISTS {
              MATCH (new)-[:CAUSED_BY|DEPENDS_ON|CONFLICTS_WITH|CO_DECIDED|PENDING_COMPARISON]-(existing)
            }
          CREATE (new)-[:PENDING_COMPARISON {created_at: $now}]->(existing)
          RETURN count(existing) AS cnt`,
-        { newId, now }
+        { newId, now, excludeIds }
       )
       const cnt = toNum(result.records[0]?.get('cnt'))
       totalCreated += cnt
@@ -258,7 +261,7 @@ export async function connectDecisions(
     dbSession: session,
     ai,
     budget = null,
-    batchCapacity = 100,
+    batchCapacity = 200,
     concurrency = 2,
     verbose = true,
     onBatchProgress,

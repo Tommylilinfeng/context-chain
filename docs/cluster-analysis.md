@@ -1,4 +1,4 @@
-# Chain Analysis — Internal Design Doc
+# Cluster Analysis — Internal Design Doc
 
 ## Problem
 
@@ -8,13 +8,13 @@ The original batch analysis groups functions linearly (first N, next N, ...) wit
 2. **Context fragmentation** — related functions end up in different batches, producing contradictory or redundant decisions
 3. **Missed cross-function insights** — the LLM can't reason about caller-callee patterns when they're split across separate LLM calls
 
-## Solution: Chain Analysis
+## Solution: Cluster Analysis
 
 A three-layer batching strategy that groups functions by their CALLS edges in the graph.
 
-### Layer 1: Chain Batches (center + level-1 as targets)
+### Layer 1: Cluster Batches (center + level-1 as targets)
 
-For each chain batch:
+For each cluster batch:
 - **Center** (level 0): selected by greedy set cover — the function that covers the most unanalyzed neighbors
 - **Level-1** (direct callers/callees): become analysis targets alongside the center
 - **Level-2** (callers/callees of level-1): loaded as context-only — visible to the LLM but no decisions produced
@@ -27,7 +27,7 @@ Functions with no CALLS edges (orphans) are grouped into linear batches using th
 
 ### Layer 3: Context Window Trim
 
-Each chain batch is pre-estimated for token cost:
+Each cluster batch is pre-estimated for token cost:
 - Target: ~1200 tokens each
 - Context-only: ~800 tokens each
 - Prompt overhead: ~2000 tokens
@@ -39,9 +39,9 @@ If a batch exceeds 100k tokens, it's trimmed: first reduce context-only function
 | File | Role |
 |------|------|
 | `src/core/batch-grouping.ts` | Graph query, seed selection (greedy set cover), batch formation, context window trim |
-| `src/core/analyze-function.ts` | `analyzeChainBatch()` — shared context pool, call graph section, relationship-aware prompt |
-| `src/dashboard/server.ts` | Integration: `chainMode` flag, batch dispatch (chain vs linear vs single), token savings tracking |
-| `src/dashboard/public/run.html` | UI: Chain Analysis toggle, tokens-saved stat, chain-mode indicators |
+| `src/core/analyze-function.ts` | `analyzeClusterBatch()` — shared context pool, call graph section, relationship-aware prompt |
+| `src/dashboard/server.ts` | Integration: `clusterMode` flag, batch dispatch (chain vs linear vs single), token savings tracking |
+| `src/dashboard/public/run.html` | UI: Cluster Analysis toggle, tokens-saved stat, chain-mode indicators |
 | `src/ingestion/ingest-cpg.ts` | Callee ID resolution fix (Joern scope prefix normalization) |
 
 ## Seed Selection Algorithm
@@ -108,20 +108,20 @@ Result: 0 → 17,023 CALLS edges on the Claude Code repo.
 Estimated per batch: `dedupedReferences * 800` tokens (each deduped snippet ~800 tokens).
 
 Tracked at three levels:
-- **Per batch**: `chain-stats` SSE event with `sharedSnippets`, `dedupedRefs`, `estimatedSaved`
-- **Per run**: `totalTokensSaved` accumulated across all chain batches, reported in `done` event
+- **Per batch**: `cluster-stats` SSE event with `sharedSnippets`, `dedupedRefs`, `estimatedSaved`
+- **Per run**: `totalTokensSaved` accumulated across all cluster batches, reported in `done` event
 - **Per function**: token usage divided equally among targets in the batch (same as linear batching)
 
 ## Concurrency & Overlap
 
-Chain batches can overlap with parallel workers analyzing functions that share callers/callees. Strategy: **allow duplicate decisions, resolve later**. Each decision has a unique `session_id: analyze-chain-{date}` and goes through `connect-decisions` grouping which deduplicates by comparing summaries.
+Chain batches can overlap with parallel workers analyzing functions that share callers/callees. Strategy: **allow duplicate decisions, resolve later**. Each decision has a unique `session_id: analyze-cluster-{date}` and goes through `connect-decisions` grouping which deduplicates by comparing summaries.
 
 ## UI
 
-- **Chain Analysis toggle** (run.html) — when on, batch size is auto-managed (default 8); when off, manual batch size applies
+- **Cluster Analysis toggle** (run.html) — when on, batch size is auto-managed (default 8); when off, manual batch size applies
 - **Tokens Saved stat** — shown in progress header during analysis
-- **[chain: centerFn]** tag — displayed next to each function-start event
-- **chain-stats events** — streamed via SSE, update the tokens-saved counter in real time
+- **[cluster: centerFn]** tag — displayed next to each function-start event
+- **cluster-stats events** — streamed via SSE, update the tokens-saved counter in real time
 
 ## Metrics from Claude Code repo test
 

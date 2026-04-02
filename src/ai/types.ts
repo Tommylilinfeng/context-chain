@@ -7,6 +7,15 @@
 
 export interface AIProviderOptions {
   timeoutMs?: number
+  onRetry?: (info: { status: number; attempt: number; maxRetries: number; waitSec: number }) => void
+  onRateLimit?: (info: RateLimitEvent) => void
+}
+
+export interface RateLimitEvent {
+  status: 'allowed' | 'allowed_warning' | 'rejected'
+  rateLimitType: string
+  resetsAt: number
+  utilization?: number
 }
 
 export interface TokenUsage {

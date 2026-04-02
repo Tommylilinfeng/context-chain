@@ -1266,9 +1266,9 @@ ${callerSection}${calleeSection}`
   }
 }
 
-// ── Chain Analysis — Relationship-Aware Batch Analysis ───
+// ── Cluster Analysis — Relationship-Aware Batch Analysis ─
 
-export interface ChainBatchResult extends AnalyzeFunctionBatchResult {
+export interface ClusterBatchResult extends AnalyzeFunctionBatchResult {
   /** Functions that were targets (produced decisions) */
   targetKeys: string[]
   /** Functions that were context-only (no decisions) */
@@ -1282,14 +1282,14 @@ export interface ChainBatchResult extends AnalyzeFunctionBatchResult {
 }
 
 /**
- * Analyze a chain batch with shared context deduplication.
+ * Analyze a cluster batch with shared context deduplication.
  *
  * - Center + level-1 → analysis targets (produce decisions)
  * - Level-2 → context-only (loaded once in shared pool)
  * - Level-1 functions with existing decisions → existing decisions fed as context
  * - Concurrent overlap: allowed, duplicates resolved later
  */
-export async function analyzeChainBatch(
+export async function analyzeClusterBatch(
   batch: RelationshipBatch,
   repo: string,
   repoPath: string,
@@ -1298,7 +1298,7 @@ export async function analyzeChainBatch(
   templateName?: string,
   onRetry?: AnalyzeFunctionInput['onRetry'],
   onRateLimit?: AnalyzeFunctionInput['onRateLimit'],
-): Promise<ChainBatchResult> {
+): Promise<ClusterBatchResult> {
   const startTime = Date.now()
   const resolvedTemplateName = templateName ?? '_default'
   const { config } = loadTemplate(resolvedTemplateName, configOverrides)
@@ -1573,7 +1573,7 @@ ${code}
             keywords: Array.isArray(d.keywords) ? d.keywords : [],
             scope: [repo],
             owner,
-            session_id: `analyze-chain-${now.slice(0, 10)}`,
+            session_id: `analyze-cluster-${now.slice(0, 10)}`,
             commit_hash: 'analyze-function',
             source: 'analyze_function',
             confidence: 'auto_generated',

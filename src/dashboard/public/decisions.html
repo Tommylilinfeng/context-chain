@@ -549,6 +549,39 @@
 .decisions-list::-webkit-scrollbar { width: 6px; }
 .decisions-list::-webkit-scrollbar-track { background: transparent; }
 .decisions-list::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
+
+/* ── Pagination ──────────────────────────────────── */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 40px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-0);
+}
+.page-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--sans);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.page-btn:disabled { opacity: 0.35; cursor: default; }
+.page-info {
+  font-size: 13px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
 </style>
 </head>
 <body>
@@ -632,20 +665,38 @@
     </div>
   </div>
 
+  <!-- Pagination -->
+  <div class="pagination-bar" id="paginationBar" style="display:none">
+    <button class="page-btn" id="prevPage" onclick="goPage(currentPage-1)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+      Prev
+    </button>
+    <span class="page-info" id="pageInfo"></span>
+    <button class="page-btn" id="nextPage" onclick="goPage(currentPage+1)">
+      Next
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+  </div>
+
 </div>
 
 <script>
 // ── State ──────────────────────────────────────────
-let allDecisions = []
-let filteredDecisions = []
+let currentDecisions = []  // current page data
 let expandedIds = new Set()
 let activeType = 'all'
 let activeKeyword = null
 let repos = []
+let currentPage = 1
+let totalPages = 1
+let totalCount = 0
+const PAGE_SIZE = 50
+let statsCache = null       // from /api/decisions/stats
+let fetchController = null  // abort controller for in-flight requests
 
 // ── API ────────────────────────────────────────────
-async function api(path) {
-  const r = await fetch(path)
+async function api(path, signal) {
+  const r = await fetch(path, signal ? { signal } : undefined)
   return r.json()
 }
 
@@ -656,12 +707,7 @@ function esc(s) {
 
 // ── Init ───────────────────────────────────────────
 async function init() {
-  const [decisions, repoData] = await Promise.all([
-    api('/api/decisions?limit=10000'),
-    api('/api/repos')
-  ])
-
-  allDecisions = decisions
+  const repoData = await api('/api/repos')
   repos = repoData
 
   // Populate repo select
@@ -682,45 +728,46 @@ async function init() {
     document.getElementById('repoSelect').value = params.get('repo')
   }
 
-  applyFilters()
-  renderStats()
-  renderKeywords()
+  await Promise.all([fetchPage(), fetchStats()])
 }
 
-// ── Filter Logic ───────────────────────────────────
-function applyFilters() {
-  const query = document.getElementById('searchInput').value.toLowerCase().trim()
+// ── Server-side fetch ─────────────────────────────
+async function fetchPage() {
+  // Cancel any in-flight request
+  if (fetchController) fetchController.abort()
+  fetchController = new AbortController()
+
+  const params = new URLSearchParams()
+  params.set('page', String(currentPage))
+  params.set('size', String(PAGE_SIZE))
+
   const repo = document.getElementById('repoSelect').value
+  const q = document.getElementById('searchInput').value.trim()
+  if (repo) params.set('repo', repo)
+  if (q) params.set('q', q)
+  if (activeType !== 'all' && activeType !== 'stale') params.set('type', activeType)
+
+  try {
+    const result = await api('/api/decisions?' + params.toString(), fetchController.signal)
+    currentDecisions = result.data || []
+    totalCount = result.total || 0
+    totalPages = result.pages || 1
+    currentPage = result.page || 1
+
+    // Client-side sort on current page (server returns newest-first by default)
+    sortCurrentPage()
+    renderDecisions()
+    renderPagination()
+  } catch (e) {
+    if (e.name === 'AbortError') return // cancelled, ignore
+    console.error('fetchPage error:', e)
+  }
+}
+
+function sortCurrentPage() {
   const sort = document.getElementById('sortSelect').value
-
-  filteredDecisions = allDecisions.filter(d => {
-    // Stale filter (special: crosses type boundaries)
-    if (activeType === 'stale') {
-      if (!['stale','code_changed','code_removed'].includes(d.staleness)) return false
-    } else {
-      // Type filter
-      const type = d.finding_type || 'decision'
-      if (activeType !== 'all' && type !== activeType) return false
-    }
-
-    // Repo filter
-    if (repo && !(d.scope || []).includes(repo)) return false
-
-    // Keyword filter
-    if (activeKeyword && !(d.keywords || []).includes(activeKeyword)) return false
-
-    // Search
-    if (query) {
-      const hay = [d.summary, d.content, ...(d.keywords || []), ...(d.anchors || [])].join(' ').toLowerCase()
-      if (!hay.includes(query)) return false
-    }
-
-    return true
-  })
-
-  // Sort — bug/suboptimal always float to top within each sort mode
   const typePriority = { bug: 0, suboptimal: 1, decision: 2 }
-  filteredDecisions.sort((a, b) => {
+  currentDecisions.sort((a, b) => {
     const pa = typePriority[a.finding_type] ?? 2
     const pb = typePriority[b.finding_type] ?? 2
     if (pa !== pb) return pa - pb
@@ -735,38 +782,67 @@ function applyFilters() {
     }
     return 0
   })
+}
 
-  renderDecisions()
+async function fetchStats() {
+  const repo = document.getElementById('repoSelect').value
+  const params = repo ? '?repo=' + encodeURIComponent(repo) : ''
+  statsCache = await api('/api/decisions/stats' + params)
+  renderStats()
+  renderKeywords()
+}
+
+// ── Filter triggers ───────────────────────────────
+function applyFilters() {
+  currentPage = 1
+  fetchPage()
+}
+
+function applyFiltersAndStats() {
+  currentPage = 1
+  fetchPage()
+  fetchStats()
+}
+
+// ── Pagination ────────────────────────────────────
+function goPage(page) {
+  if (page < 1 || page > totalPages) return
+  currentPage = page
+  fetchPage()
+  // Scroll to top of list
+  document.getElementById('decisionsList').scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function renderPagination() {
+  const bar = document.getElementById('paginationBar')
+  if (totalPages <= 1) { bar.style.display = 'none'; return }
+  bar.style.display = 'flex'
+  document.getElementById('prevPage').disabled = currentPage <= 1
+  document.getElementById('nextPage').disabled = currentPage >= totalPages
+  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages} (${totalCount} total)`
 }
 
 // ── Render Stats ───────────────────────────────────
 function renderStats() {
-  const total = allDecisions.length
-  const decisions = allDecisions.filter(d => (d.finding_type || 'decision') === 'decision').length
-  const bugs = allDecisions.filter(d => d.finding_type === 'bug').length
-  const suboptimal = allDecisions.filter(d => d.finding_type === 'suboptimal').length
-  const anchored = allDecisions.filter(d => (d.anchors || []).length > 0).length
-  const stale = allDecisions.filter(d => ['stale','code_changed','code_removed'].includes(d.staleness)).length
+  if (!statsCache) return
+  const { total, typeCounts, stalenessCounts } = statsCache
+  const decisions = typeCounts['decision'] || 0
+  const bugs = typeCounts['bug'] || 0
+  const suboptimal = typeCounts['suboptimal'] || 0
+  const stale = (stalenessCounts['stale'] || 0) + (stalenessCounts['code_changed'] || 0) + (stalenessCounts['code_removed'] || 0)
 
   document.getElementById('statsBar').innerHTML = `
     <div class="stat-pill"><div class="dot" style="background:var(--text-secondary)"></div><span class="count">${total}</span><span class="label">total</span></div>
     <div class="stat-pill"><div class="dot" style="background:var(--accent)"></div><span class="count">${decisions}</span><span class="label">decisions</span></div>
     ${bugs > 0 ? `<div class="stat-pill"><div class="dot" style="background:var(--red)"></div><span class="count">${bugs}</span><span class="label">bugs</span></div>` : ''}
     ${suboptimal > 0 ? `<div class="stat-pill"><div class="dot" style="background:var(--yellow)"></div><span class="count">${suboptimal}</span><span class="label">suboptimal</span></div>` : ''}
-    <div class="stat-pill"><div class="dot" style="background:var(--purple)"></div><span class="count">${anchored}</span><span class="label">anchored</span></div>
     ${stale > 0 ? `<div class="stat-pill"><div class="dot" style="background:#fb923c"></div><span class="count">${stale}</span><span class="label">stale</span></div>` : ''}
   `
 }
 
 // ── Render Keywords Sidebar ────────────────────────
 function renderKeywords() {
-  const counts = {}
-  for (const d of allDecisions) {
-    for (const kw of (d.keywords || [])) {
-      counts[kw] = (counts[kw] || 0) + 1
-    }
-  }
-
+  const counts = statsCache ? statsCache.keywordCounts : {}
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1])
 
   if (sorted.length === 0) {
@@ -808,7 +884,16 @@ function clearKeywordFilter() {
 function renderDecisions() {
   const container = document.getElementById('decisionsList')
 
-  if (filteredDecisions.length === 0) {
+  // Client-side filters that aren't sent to server
+  let displayDecisions = currentDecisions
+  if (activeKeyword) {
+    displayDecisions = displayDecisions.filter(d => (d.keywords || []).includes(activeKeyword))
+  }
+  if (activeType === 'stale') {
+    displayDecisions = displayDecisions.filter(d => ['stale','code_changed','code_removed'].includes(d.staleness))
+  }
+
+  if (displayDecisions.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon"></div>
@@ -818,9 +903,9 @@ function renderDecisions() {
     return
   }
 
-  const resultInfo = `<div class="result-info"><span class="result-count">${filteredDecisions.length}</span> decision${filteredDecisions.length !== 1 ? 's' : ''}</div>`
+  const resultInfo = `<div class="result-info"><span class="result-count">${displayDecisions.length}</span> decision${displayDecisions.length !== 1 ? 's' : ''} on this page</div>`
 
-  const cards = filteredDecisions.map((d, i) => {
+  const cards = displayDecisions.map((d, i) => {
     const type = d.finding_type || 'decision'
     const expanded = expandedIds.has(d.id)
     const isStale = ['stale','code_changed','code_removed'].includes(d.staleness)
@@ -951,7 +1036,7 @@ async function translateDecision(id) {
     }
     // Reload decisions to show translation
     btn.innerHTML = '<span style="color:var(--green)">Done!</span>'
-    setTimeout(() => { loadDecisions() }, 800)
+    setTimeout(() => { fetchPage() }, 800)
   } catch (e) {
     btn.innerHTML = '<span style="color:var(--red)">Error</span>'
     setTimeout(() => { btn.innerHTML = origText; btn.disabled = false }, 2000)
@@ -976,9 +1061,9 @@ function filterByKeyword(kw) {
 }
 
 // ── Event Bindings ─────────────────────────────────
-document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 200))
-document.getElementById('repoSelect').addEventListener('change', applyFilters)
-document.getElementById('sortSelect').addEventListener('change', applyFilters)
+document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 300))
+document.getElementById('repoSelect').addEventListener('change', applyFiltersAndStats)
+document.getElementById('sortSelect').addEventListener('change', () => { sortCurrentPage(); renderDecisions() })
 
 document.querySelectorAll('#typeFilter .filter-chip').forEach(chip => {
   chip.addEventListener('click', () => {

@@ -140,13 +140,13 @@
 
       <hr class="divider">
 
-      <!-- Chain Analysis toggle -->
+      <!-- Cluster Analysis toggle -->
       <div>
         <div class="section-title">Batching Strategy</div>
         <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:8px 0">
-          <input type="checkbox" id="chainMode" checked>
+          <input type="checkbox" id="clusterMode" checked>
           <div>
-            <div style="font-weight:600">Chain Analysis</div>
+            <div style="font-weight:600">Cluster Analysis</div>
             <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Group by call graph, deduplicate shared context</div>
           </div>
         </label>
@@ -405,24 +405,33 @@
     if (status === 'running') item.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
 
-  // ── SSE Connection (with dedup: track highest analyzed count to skip replayed events) ──
+  // ── SSE Connection (with dedup + auto-reconnect) ──
   let lastSeenAnalyzed = -1
+  let sseLastSeq = -1
+  let sseReconnectTimer = null
 
   function connectSSE() {
     if (eventSource) eventSource.close()
-    eventSource = new EventSource('/api/run/stream')
+    if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null }
+    const url = sseLastSeq > -1 ? `/api/run/stream?lastSeq=${sseLastSeq}` : '/api/run/stream'
+    eventSource = new EventSource(url)
+
+    // Track sequence for reconnect
+    function trackSeq(e) { if (e.lastEventId) sseLastSeq = parseInt(e.lastEventId) }
 
     eventSource.addEventListener('function-start', (e) => {
+      trackSeq(e)
       try {
         const d = JSON.parse(e.data)
         updateFnItem(d.index, 'running', 0)
-        const modeTag = d.mode === 'chain' ? `<span style="color:var(--accent);font-size:11px;margin-left:6px">[chain: ${d.center || '?'}]</span>` : ''
+        const modeTag = d.mode === 'cluster' ? `<span style="color:var(--accent);font-size:11px;margin-left:6px">[cluster: ${d.center || '?'}]</span>` : ''
         document.getElementById('currentFunction').innerHTML = `Analyzing ${d.name} (${d.file})${modeTag}`
       } catch {}
       updateElapsed()
     })
 
     eventSource.addEventListener('function-done', (e) => {
+      trackSeq(e)
       try {
         const d = JSON.parse(e.data)
         updateFnItem(d.index, 'done', d.decisions)
@@ -430,6 +439,7 @@
     })
 
     eventSource.addEventListener('function-error', (e) => {
+      trackSeq(e)
       try {
         const d = JSON.parse(e.data)
         updateFnItem(d.index, 'error', 0)
@@ -457,6 +467,7 @@
     })
 
     eventSource.addEventListener('progress', (e) => {
+      trackSeq(e)
       try {
         const d = JSON.parse(e.data)
         // Dedup: skip if this is a replayed older event
@@ -467,7 +478,7 @@
       updateElapsed()
     })
 
-    eventSource.addEventListener('chain-stats', (e) => {
+    eventSource.addEventListener('cluster-stats', (e) => {
       try {
         const d = JSON.parse(e.data)
         const saved = parseInt(document.getElementById('tokensSavedCount').textContent.replace(/,/g, '')) || 0
@@ -516,24 +527,30 @@
     })
 
     eventSource.onerror = () => {
-      // SSE connection lost
+      // SSE connection lost — auto-reconnect after 2s if job was running
       if (eventSource) { eventSource.close(); eventSource = null }
+      sseReconnectTimer = setTimeout(() => {
+        // Only reconnect if we believe the job is still running
+        fetch('/api/run/status').then(r => r.json()).then(s => {
+          if (s.status === 'running') connectSSE()
+        }).catch(() => {})
+      }, 2000)
     }
   }
 
-  // ── Chain mode toggle — hides batch size when chain is on ──
-  function updateChainModeUI() {
-    const isChain = document.getElementById('chainMode').checked
+  // ── Cluster mode toggle — hides batch size when cluster is on ──
+  function updateClusterModeUI() {
+    const isCluster = document.getElementById('clusterMode').checked
     const batchField = document.getElementById('batchSizeField')
     const hint = document.getElementById('throughputHint')
-    batchField.style.opacity = isChain ? '0.35' : '1'
-    batchField.style.pointerEvents = isChain ? 'none' : 'auto'
-    hint.textContent = isChain
-      ? 'Chain Analysis auto-sizes batches by call graph. Concurrency: parallel workers.'
+    batchField.style.opacity = isCluster ? '0.35' : '1'
+    batchField.style.pointerEvents = isCluster ? 'none' : 'auto'
+    hint.textContent = isCluster
+      ? 'Cluster Analysis auto-sizes batches by call graph. Concurrency: parallel workers.'
       : 'Concurrency: parallel workers. Batch size: functions per LLM call.'
   }
-  document.getElementById('chainMode').addEventListener('change', updateChainModeUI)
-  updateChainModeUI()
+  document.getElementById('clusterMode').addEventListener('change', updateClusterModeUI)
+  updateClusterModeUI()
 
   // ── Advanced mode toggle ──
   document.getElementById('advancedMode').addEventListener('change', (e) => {
@@ -566,14 +583,14 @@
 
     const advCfg = getAdvancedConfig()
     const selectedPkgs = getSelectedPackages()
-    const isChainMode = document.getElementById('chainMode').checked
+    const isClusterMode = document.getElementById('clusterMode').checked
     const payload = {
       repo,
       summaryWords: parseInt(document.getElementById('summaryWords').value),
       contentWords: parseInt(document.getElementById('contentWords').value),
       concurrency: parseInt(document.getElementById('concurrencyInput').value) || 2,
-      batchSize: isChainMode ? 8 : (parseInt(document.getElementById('batchSizeInput').value) || 1),
-      chainMode: isChainMode,
+      batchSize: isClusterMode ? 8 : (parseInt(document.getElementById('batchSizeInput').value) || 1),
+      clusterMode: isClusterMode,
       ...(selectedPkgs ? { packages: selectedPkgs } : {}),
       ...advCfg,
     }

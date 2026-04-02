@@ -27,7 +27,7 @@ const getArg = (f: string) => { const i = args.indexOf(f); return i !== -1 ? arg
 
 const skipNormalize = args.includes('--skip-normalize')
 const budgetStr = getArg('--budget')
-const batchSize = parseInt(getArg('--batch-size') ?? '100')
+const batchSize = parseInt(getArg('--batch-size') ?? '200')
 const concurrency = parseInt(getArg('--concurrency') ?? '2')
 
 // ── Main ────────────────────────────────────────────────

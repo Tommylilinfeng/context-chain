@@ -113,6 +113,10 @@ export interface AnalyzeFunctionInput {
   goal?: string
   /** owner 标识 */
   owner?: string
+  /** Rate limit retry callback — surfaces 429/529 events to callers (e.g. dashboard SSE) */
+  onRetry?: (info: { status: number; attempt: number; maxRetries: number; waitSec: number }) => void
+  /** Quota pacing callback — surfaces 5h quota status from CLI rate_limit_event */
+  onRateLimit?: (info: import('../ai/types').RateLimitEvent) => void
 }
 
 // ── 输出 ────────────────────────────────────────────────

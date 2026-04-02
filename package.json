@@ -38,6 +38,7 @@
     "cleanup": "node_modules/.bin/ts-node --transpile-only src/runners/cleanup-sessions.ts",
     "refine": "node_modules/.bin/ts-node --transpile-only src/ingestion/refine.ts",
     "connect": "node_modules/.bin/ts-node --transpile-only src/runners/connect.ts",
+    "discover-modules": "node_modules/.bin/ts-node --transpile-only src/runners/discover-modules.ts",
     "localize": "node_modules/.bin/ts-node --transpile-only src/runners/localize.ts",
     "quota": "node_modules/.bin/ts-node --transpile-only scripts/check-quota.ts",
     "mcp": "node_modules/.bin/ts-node --transpile-only src/mcp/server.ts",
