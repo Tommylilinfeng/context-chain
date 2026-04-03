@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CKG — Design Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+.main { display:flex; flex-direction:column; height:100vh; }
+.content-area { flex:1; display:grid; grid-template-columns:300px 1fr; overflow:hidden; min-height:0; }
+
+/* ── Left: Controls ────────────────────────────── */
+.controls {
+  border-right:1px solid var(--border); padding:20px;
+  display:flex; flex-direction:column; gap:14px; overflow-y:auto;
+}
+.section-title {
+  font-size:10px; font-weight:700; color:var(--text-dim);
+  text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;
+}
+.divider { border:none; border-top:1px solid var(--border-subtle); margin:2px 0; }
+.config-row { display:flex; gap:10px; }
+.config-row .field { flex:1; }
+.config-row .field label {
+  display:block; font-size:10px; font-weight:700; color:var(--text-dim);
+  text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;
+}
+.config-row .field input, .config-row .field select {
+  width:100%; background:var(--surface-2); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); font-family:var(--mono);
+  font-size:14px; padding:8px 10px; text-align:center;
+}
+.config-row .field input:focus, .config-row .field select:focus { outline:none; border-color:var(--accent); }
+.hint { font-size:10px; color:var(--text-dim); line-height:1.4; }
+
+.btn-primary, .btn-secondary, .btn-stop {
+  width:100%; padding:10px; border-radius:8px; border:1px solid var(--border);
+  font-family:var(--sans); font-size:13px; font-weight:600; cursor:pointer;
+  transition:all var(--transition-fast);
+}
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn-primary:hover { opacity:0.9; }
+.btn-secondary { background:var(--surface-1); color:var(--text); }
+.btn-secondary:hover { border-color:var(--accent); }
+.btn-stop { background:var(--red); color:#fff; border-color:var(--red); }
+.btn-primary:disabled, .btn-secondary:disabled { opacity:0.4; cursor:not-allowed; }
+
+/* Stats summary in controls */
+.stats-summary {
+  background:var(--surface-2); border-radius:8px; padding:12px;
+  font-family:var(--mono); font-size:11px; color:var(--text-secondary);
+  line-height:1.8; display:none;
+}
+.stats-summary.visible { display:block; }
+.stats-summary .s-val { color:var(--text); font-weight:600; }
+
+/* Results in controls */
+.results-box {
+  background:var(--surface-2); border-radius:8px; padding:12px;
+  display:none;
+}
+.results-box.visible { display:block; }
+.results-row {
+  display:flex; justify-content:space-between; padding:3px 0;
+  font-size:11px; color:var(--text-secondary);
+}
+.results-row .r-val { font-family:var(--mono); font-weight:600; color:var(--text); }
+
+/* ── Right: Main Area ──────────────────────────── */
+.right-area { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+
+/* Tab bar */
+.tab-bar { display:flex; border-bottom:1px solid var(--border); flex-shrink:0; background:var(--surface-0); }
+.tab-btn {
+  flex:1; padding:10px 0; text-align:center; font-size:12px; font-weight:600;
+  color:var(--text-dim); cursor:pointer; border:none; background:none;
+  border-bottom:2px solid transparent; transition:all 0.15s;
+  font-family:var(--sans);
+}
+.tab-btn:hover { color:var(--text); background:var(--surface-1); }
+.tab-btn.active { color:var(--accent); border-bottom-color:var(--accent); }
+.tab-panel { display:none; flex:1; overflow:hidden; }
+.tab-panel.active { display:flex; flex-direction:column; }
+
+/* ── Modules Tab ───────────────────────────────── */
+.modules-scroll { flex:1; overflow-y:auto; padding:16px 20px; }
+.modules-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(380px, 1fr));
+  gap:14px;
+}
+.module-card {
+  background:var(--surface-1); border:1px solid var(--border-subtle);
+  border-radius:var(--radius); padding:16px;
+  transition:border-color var(--transition-fast);
+}
+.module-card:hover { border-color:var(--border); }
+.module-card.running { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.module-card.done { border-color:var(--green); }
+
+.mod-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.mod-name { font-family:var(--sans); font-size:14px; font-weight:600; color:var(--text); }
+.mod-badge {
+  font-family:var(--mono); font-size:10px; padding:2px 8px;
+  border-radius:100px; background:var(--surface-2); color:var(--text-dim);
+}
+.mod-badge.running { background:rgba(77,142,255,0.15); color:var(--accent); }
+.mod-badge.done { background:rgba(52,210,123,0.15); color:var(--green); }
+
+.mod-stats {
+  display:flex; gap:12px; margin-bottom:8px;
+  font-family:var(--mono); font-size:10px; color:var(--text-dim);
+}
+.mod-stats .sv { color:var(--text-secondary); font-weight:600; }
+
+/* Compact histogram */
+.hist-compact { display:flex; align-items:flex-end; gap:2px; height:32px; margin-bottom:6px; }
+.hist-compact .hb {
+  flex:1; background:var(--accent); border-radius:1px 1px 0 0;
+  min-height:1px; opacity:0.6; position:relative;
+}
+.hist-compact .hb:hover { opacity:1; }
+.hist-compact .hb .tt {
+  display:none; position:absolute; bottom:calc(100% + 4px); left:50%;
+  transform:translateX(-50%); background:var(--surface-3); border:1px solid var(--border);
+  border-radius:4px; padding:2px 6px; font-family:var(--mono); font-size:9px;
+  color:var(--text); white-space:nowrap; z-index:5;
+}
+.hist-compact .hb:hover .tt { display:block; }
+
+/* Token estimate row */
+.tok-row {
+  display:flex; align-items:center; gap:8px;
+  font-family:var(--mono); font-size:10px; color:var(--text-dim);
+  margin-bottom:6px;
+}
+.tok-row .tok-bar-bg {
+  flex:1; height:4px; background:var(--surface-3); border-radius:2px; overflow:hidden;
+}
+.tok-row .tok-bar {
+  height:100%; border-radius:2px; background:var(--accent);
+  transition:width 0.3s;
+}
+.tok-row .tok-bar.warn { background:var(--yellow); }
+.tok-row .tok-bar.danger { background:var(--red); }
+.tok-row .tok-label { min-width:70px; text-align:right; }
+
+.mod-foot {
+  display:flex; justify-content:space-between; align-items:center; margin-top:8px;
+  padding-top:8px; border-top:1px solid var(--border-subtle);
+}
+.mod-foot .largest {
+  font-size:9px; color:var(--text-dim); font-family:var(--mono);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:65%;
+}
+.mod-run-btn {
+  padding:4px 14px; border-radius:6px; border:1px solid var(--accent);
+  background:transparent; color:var(--accent); font-family:var(--sans);
+  font-size:11px; font-weight:500; cursor:pointer; transition:all var(--transition-fast);
+}
+.mod-run-btn:hover { background:var(--accent); color:#fff; }
+.mod-run-btn:disabled { opacity:0.3; cursor:not-allowed; }
+
+/* ── Log Tab ───────────────────────────────────── */
+.log-scroll {
+  flex:1; overflow-y:auto; padding:16px 20px;
+  font-family:var(--mono); font-size:11px; line-height:1.9;
+  color:var(--text-secondary);
+}
+.log-scroll .ll { white-space:pre-wrap; padding:1px 0; }
+.log-scroll .ll-layer { color:var(--accent); font-weight:600; }
+.log-scroll .ll-ok { color:var(--green); }
+.log-scroll .ll-err { color:var(--red); }
+.log-scroll .ll-dim { color:var(--text-dim); }
+.log-counter {
+  font-family:var(--mono); font-size:10px; color:var(--text-dim);
+  padding:0 8px;
+}
+
+/* ── Empty/Loading ─────────────────────────────── */
+.empty-state {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  height:100%; color:var(--text-dim); text-align:center; padding:40px;
+  font-family:var(--sans);
+}
+.empty-state h3 { font-size:18px; font-weight:400; color:var(--text-secondary); margin-bottom:6px; }
+.empty-state p { font-size:12px; max-width:300px; line-height:1.6; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.spinner {
+  width:18px; height:18px; border:2px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin 0.6s linear infinite; margin-right:10px; display:inline-block; vertical-align:middle;
+}
+
+/* ── Module Map ────────────────────────────────── */
+.map-container { flex:1; position:relative; overflow:hidden; background:#08090c; }
+.map-container svg { width:100%; height:100%; display:block; }
+
+.mod-card {
+  background:rgba(16,18,24,0.95); border:1px solid rgba(255,255,255,0.08);
+  border-radius:8px; overflow:hidden; cursor:grab; user-select:none;
+  box-shadow:0 2px 12px rgba(0,0,0,0.4);
+  transition:border-color 0.15s, box-shadow 0.15s;
+  min-width:140px;
+}
+.mod-card:hover { border-color:rgba(255,255,255,0.18); box-shadow:0 4px 24px rgba(0,0,0,0.6); }
+.mod-card.active { cursor:grabbing; }
+.mod-card-head {
+  padding:8px 10px; display:flex; justify-content:space-between; align-items:center;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+}
+.mod-card-head .mc-title {
+  font-family:var(--sans); font-size:11px; font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.mod-card-head .mc-count {
+  font-family:var(--mono); font-size:9px; color:var(--text-dim);
+  white-space:nowrap; margin-left:8px;
+}
+.mod-card-body { padding:6px 0; max-height:200px; overflow:hidden; }
+.mod-card-row {
+  padding:2px 10px; font-family:var(--mono); font-size:9px;
+  color:rgba(255,255,255,0.35); display:flex; justify-content:space-between;
+  line-height:1.6;
+}
+.mod-card-row .mcr-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mod-card-row .mcr-fns { color:rgba(255,255,255,0.2); margin-left:6px; white-space:nowrap; }
+</style>
+</head>
+<body>
+<nav class="sidebar" id="sidebar"></nav>
+<script src="/sidebar.js"></script>
+
+<div class="main">
+  <div class="page-hero">
+    <h2>Design Analysis</h2>
+    <p class="subtitle">Sub-module decomposition, design choices, and theme discovery</p>
+  </div>
+
+  <div class="content-area">
+    <!-- Left: Controls -->
+    <div class="controls">
+      <div class="section-title">Module Discovery</div>
+      <div class="config-row">
+        <div class="field">
+          <label>Hub Threshold</label>
+          <input type="number" id="hubThreshold" value="20" min="5" max="100">
+        </div>
+      </div>
+      <div class="hint">Functions with more inbound calls than this are removed before community detection.</div>
+      <button class="btn-secondary" id="btnDiscover" onclick="runModuleDiscovery()">Discover Modules</button>
+
+      <hr class="divider">
+      <div class="section-title">Sub-Module Decomposition</div>
+      <div class="config-row">
+        <div class="field">
+          <label>Max Lines / fn</label>
+          <input type="number" id="maxLines" value="10" min="0" step="10">
+        </div>
+        <div class="field">
+          <label>Concurrency</label>
+          <input type="number" id="concurrency" value="5" min="1" max="20">
+        </div>
+      </div>
+      <div class="hint">Lines of source code per function in the LLM prompt. 0 = name only.</div>
+
+      <hr class="divider">
+      <button class="btn-secondary" id="btnStats" onclick="loadStats(true)" style="display:none">Refresh Stats</button>
+
+      <div class="stats-summary" id="statsSummary">
+        <div>Modules: <span class="s-val" id="sModules">-</span></div>
+        <div>Functions: <span class="s-val" id="sFunctions">-</span></div>
+        <div>Lines: <span class="s-val" id="sLines">-</span></div>
+      </div>
+
+      <hr class="divider">
+      <div class="section-title">Run</div>
+      <button class="btn-primary" id="btnRun" onclick="startAnalysis()" disabled>Run All Modules</button>
+      <button class="btn-stop" id="btnStop" onclick="stopAnalysis()" style="display:none">Stop</button>
+      <div class="hint" id="runStatus"></div>
+
+      <div class="results-box" id="resultsBox"></div>
+    </div>
+
+    <!-- Right: Tabs -->
+    <div class="right-area">
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('modules')">Modules</button>
+        <button class="tab-btn" onclick="switchTab('log')">Log <span class="log-counter" id="logCount"></span></button>
+        <button class="tab-btn" onclick="switchTab('map')">Map</button>
+      </div>
+
+      <!-- Modules Tab -->
+      <div class="tab-panel active" id="tab-modules">
+        <div class="modules-scroll" id="modulesScroll">
+          <div class="empty-state">
+            <h3>No data loaded</h3>
+            <p>Click "Load Stats" to read module structure from the graph</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log Tab -->
+      <div class="tab-panel" id="tab-log">
+        <div class="log-scroll" id="logScroll"></div>
+      </div>
+
+      <!-- Map Tab -->
+      <div class="tab-panel" id="tab-map">
+        <div class="map-container" id="mapContainer">
+          <svg id="mapSvg"></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let statsData = null
+let eventSource = null
+let timerInterval = null
+let logLines = 0
+let runningModuleId = null
+
+// ── Tab switching ──────────────────────────────
+
+function switchTab(name) {
+  var tabs = ['modules', 'log', 'map']
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active', tabs[i] === name)
+  })
+  tabs.forEach(t => {
+    var el = document.getElementById('tab-' + t)
+    if (el) el.classList.toggle('active', t === name)
+  })
+  if (name === 'map') initMap()
+}
+
+// ── Load Stats ─────────────────────────────────
+
+async function loadStats(force) {
+  const btn = document.getElementById('btnStats')
+  document.getElementById('modulesScroll').innerHTML = '<div class="empty-state"><span class="spinner"></span><p>Loading module stats...</p></div>'
+
+  try {
+    const url = force ? '/api/design-analysis/stats?force=1' : '/api/design-analysis/stats'
+    const res = await fetch(url)
+    statsData = await res.json()
+    if (statsData.error) throw new Error(statsData.error)
+    renderModules()
+    document.getElementById('btnRun').disabled = false
+    document.getElementById('btnStats').style.display = ''
+    document.getElementById('statsSummary').classList.add('visible')
+    document.getElementById('sModules').textContent = statsData.modules.length
+    document.getElementById('sFunctions').textContent = statsData.totalFunctions.toLocaleString()
+    document.getElementById('sLines').textContent = statsData.totalLines.toLocaleString()
+  } catch (err) {
+    document.getElementById('modulesScroll').innerHTML = `<div class="empty-state" style="color:var(--red)">${err.message}</div>`
+    document.getElementById('btnStats').style.display = ''
+  }
+}
+
+// ── Render Modules ─────────────────────────────
+
+const BUCKETS = [
+  { label:'1-5', lo:1, hi:5 }, { label:'6-10', lo:6, hi:10 },
+  { label:'11-30', lo:11, hi:30 }, { label:'31-60', lo:31, hi:60 },
+  { label:'61-100', lo:61, hi:100 }, { label:'101-200', lo:101, hi:200 },
+  { label:'200+', lo:201, hi:Infinity },
+]
+
+function renderModules() {
+  if (!statsData) return
+  const maxLines = parseInt(document.getElementById('maxLines').value) || 0
+  const html = statsData.modules.map(mod => {
+    // Find token estimate for current maxLines
+    const est = mod.tokenEstimates.find(e => e.maxLines === maxLines) || mod.tokenEstimates[0]
+    const pct = est ? est.pctOf200K : 0
+    const barCls = pct > 90 ? 'danger' : pct > 70 ? 'warn' : ''
+    const tokens = est ? est.tokens.toLocaleString() : '?'
+
+    // Histogram
+    const buckets = BUCKETS.map(b => ({ label: b.label, count: mod.lineCounts.filter(lc => lc >= b.lo && lc <= b.hi).length }))
+    const maxB = Math.max(...buckets.map(b => b.count), 1)
+    const bars = buckets.map(b => {
+      const h = Math.max(1, Math.round(b.count / maxB * 32))
+      const p = mod.lineCounts.length > 0 ? (b.count / mod.lineCounts.length * 100).toFixed(0) : 0
+      return `<div class="hb" style="height:${h}px"><div class="tt">${b.label}: ${b.count} (${p}%)</div></div>`
+    }).join('')
+
+    return `
+    <div class="module-card" id="card-${mod.moduleId}">
+      <div class="mod-head">
+        <span class="mod-name">${esc(mod.moduleName)}</span>
+        <span class="mod-badge" id="badge-${mod.moduleId}">${mod.functionCount} fns</span>
+      </div>
+      <div class="mod-stats">
+        <span>mean <span class="sv">${mod.meanLines}</span></span>
+        <span>med <span class="sv">${mod.medianLines}</span></span>
+        <span>p90 <span class="sv">${mod.p90Lines}</span></span>
+        <span>max <span class="sv">${mod.maxLines}</span></span>
+      </div>
+      <div class="hist-compact">${bars}</div>
+      <div class="tok-row">
+        <span>${tokens} tokens</span>
+        <div class="tok-bar-bg"><div class="tok-bar ${barCls}" style="width:${Math.min(100, pct)}%"></div></div>
+        <span class="tok-label">${pct}% of 200K</span>
+      </div>
+      <div class="mod-foot">
+        <span class="largest">${esc(mod.maxFunctionName)} (${mod.maxLines}L)</span>
+        <button class="mod-run-btn" id="runbtn-${mod.moduleId}" onclick="startModuleRun('${mod.moduleId}','${esc(mod.moduleName)}')">Run</button>
+      </div>
+    </div>`
+  }).join('')
+
+  document.getElementById('modulesScroll').innerHTML = `<div class="modules-grid">${html}</div>`
+}
+
+document.getElementById('maxLines').addEventListener('input', renderModules)
+
+// ── Run Analysis ───────────────────────────────
+
+function startModuleRun(moduleId, moduleName) {
+  runningModuleId = moduleId
+  _startRun({ moduleId }, moduleName)
+}
+
+function startAnalysis() {
+  runningModuleId = null
+  _startRun({}, 'All modules')
+}
+
+async function _startRun(extraBody, label) {
+  const maxLines = parseInt(document.getElementById('maxLines').value) || 0
+  const concurrency = parseInt(document.getElementById('concurrency').value) || 5
+
+  // UI state
+  document.getElementById('btnRun').disabled = true
+  document.getElementById('btnStop').style.display = ''
+  document.querySelectorAll('.mod-run-btn').forEach(b => b.disabled = true)
+  document.getElementById('resultsBox').classList.remove('visible')
+  document.getElementById('logScroll').innerHTML = ''
+  logLines = 0
+  updateLogCount()
+
+  // Highlight running card
+  if (runningModuleId) {
+    const card = document.getElementById('card-' + runningModuleId)
+    if (card) card.classList.add('running')
+    const badge = document.getElementById('badge-' + runningModuleId)
+    if (badge) { badge.textContent = 'running...'; badge.classList.add('running') }
+  }
+
+  // Timer
+  document.getElementById('runStatus').textContent = `Running: ${label}`
+  const startTime = Date.now()
+  timerInterval = setInterval(() => {
+    const s = ((Date.now() - startTime) / 1000).toFixed(0)
+    document.getElementById('runStatus').textContent = `Running: ${label} (${s}s)`
+  }, 1000)
+
+  // Switch to log tab
+  switchTab('log')
+
+  try {
+    await fetch('/api/design-analysis/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ maxLinesPerFunction: maxLines, concurrency, ...extraBody }),
+    })
+    connectSSE()
+  } catch (err) {
+    appendLog('err', err.message)
+    resetUI()
+  }
+}
+
+async function stopAnalysis() {
+  await fetch('/api/design-analysis/stop', { method:'POST' })
+  document.getElementById('btnStop').style.display = 'none'
+  appendLog('dim', 'Stopping...')
+}
+
+// ── SSE ────────────────────────────────────────
+
+function connectSSE() {
+  eventSource = new EventSource('/api/design-analysis/stream')
+
+  eventSource.addEventListener('log', (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'progress') {
+        // Detect layer headers
+        const isLayer = /^Layer \d|^Found \d|^Loading |^Filtered /.test(msg.message)
+        appendLog(isLayer ? 'layer' : 'info', msg.message)
+      }
+      else if (msg.type === 'started') appendLog('layer', `Started: repo=${msg.repo} maxLines=${msg.maxLinesPerFunction}`)
+      else if (msg.type === 'done') appendLog('ok', `Done! ${msg.totalTokens.toLocaleString()} tokens, ${(msg.durationMs/1000).toFixed(1)}s`)
+      else if (msg.type === 'error') appendLog('err', msg.error)
+      else if (msg.type === 'stopping') appendLog('dim', 'Stopping...')
+    } catch {}
+  })
+
+  eventSource.addEventListener('status', async (e) => {
+    eventSource.close()
+    if (e.data === 'done' || e.data === 'error') {
+      const res = await fetch('/api/design-analysis/results')
+      const data = await res.json()
+      if (data.result) renderResults(data.result)
+      // Refresh map data so new sub-modules show up
+      mapInitialized = false
+    }
+    resetUI()
+  })
+
+  eventSource.onerror = () => {
+    eventSource.close()
+    setTimeout(async () => {
+      try {
+        const res = await fetch('/api/design-analysis/results')
+        const data = await res.json()
+        if (data.status === 'running') connectSSE()
+        else { if (data.result) renderResults(data.result); resetUI() }
+      } catch { resetUI() }
+    }, 2000)
+  }
+}
+
+function appendLog(type, text) {
+  const el = document.getElementById('logScroll')
+  const cls = { err:'ll-err', ok:'ll-ok', layer:'ll-layer', dim:'ll-dim' }[type] || ''
+  el.innerHTML += `<div class="ll ${cls}">${esc(text)}</div>`
+  el.scrollTop = el.scrollHeight
+  logLines++
+  updateLogCount()
+}
+
+function updateLogCount() {
+  document.getElementById('logCount').textContent = logLines > 0 ? `(${logLines})` : ''
+}
+
+function resetUI() {
+  document.getElementById('btnRun').disabled = !statsData
+  document.getElementById('btnStop').style.display = 'none'
+  document.querySelectorAll('.mod-run-btn').forEach(b => b.disabled = false)
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null }
+  document.getElementById('runStatus').textContent = ''
+
+  // Clear running state on cards
+  document.querySelectorAll('.module-card.running').forEach(c => c.classList.remove('running'))
+  if (runningModuleId) {
+    const card = document.getElementById('card-' + runningModuleId)
+    if (card) card.classList.add('done')
+    const badge = document.getElementById('badge-' + runningModuleId)
+    if (badge) { badge.textContent = 'done'; badge.classList.remove('running'); badge.classList.add('done') }
+  }
+  runningModuleId = null
+}
+
+function renderResults(r) {
+  const box = document.getElementById('resultsBox')
+  box.classList.add('visible')
+  const rows = [
+    ['Sub-modules', r.layer2.subModulesCreated],
+    ['Misassigned', r.layer2.misassignedCount],
+    ['L2 tokens', r.layer2.tokens.toLocaleString()],
+    ['Reassigned', r.layer2_5.reassigned],
+    ['Infrastructure', r.layer2_5.infrastructure],
+    ['L2.5 tokens', r.layer2_5.tokens.toLocaleString()],
+    ['Total tokens', r.totalTokens.toLocaleString()],
+    ['Duration', (r.durationMs / 1000).toFixed(1) + 's'],
+  ]
+  box.innerHTML = `<div class="section-title">Results</div>` + rows.map(([k,v]) =>
+    `<div class="results-row"><span>${k}</span><span class="r-val">${v}</span></div>`
+  ).join('')
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;') }
+
+// ── Init ───────────────────────────────────────
+
+;(async () => {
+  // Auto-load stats (cached on server, instant after first load)
+  loadStats()
+
+  // Check if a job is already running
+  try {
+    const res = await fetch('/api/design-analysis/results')
+    const data = await res.json()
+    if (data.status === 'running') {
+      document.getElementById('btnRun').disabled = true
+      document.getElementById('btnStop').style.display = ''
+      document.getElementById('runStatus').textContent = 'Running...'
+      switchTab('log')
+      connectSSE()
+    } else if (data.status === 'done' && data.result) {
+      renderResults(data.result)
+    }
+  } catch {}
+})()
+
+// ══════════════════════════════════════════════════
+// Module Map (Treemap + Connections)
+// ══════════════════════════════════════════════════
+
+let mapInitialized = false
+let mapData = null
+
+const MCOLORS = ['#4d8eff','#a78bfa','#34d27b','#e8b931','#22d3ee','#f472b6','#fb923c','#f05656']
+function mColor(i) { return MCOLORS[i % MCOLORS.length] }
+
+// ── Module Discovery ────────────────────────────
+
+async function runModuleDiscovery() {
+  const hubThreshold = parseInt(document.getElementById('hubThreshold').value) || 20
+  document.getElementById('btnDiscover').disabled = true
+  document.getElementById('btnDiscover').textContent = 'Running...'
+  document.getElementById('logScroll').innerHTML = ''
+  logLines = 0; updateLogCount()
+  switchTab('log')
+
+  try {
+    await fetch('/api/module-discovery/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hubThreshold }),
+    })
+    connectDiscoverySSE()
+  } catch (err) {
+    appendLog('err', err.message)
+    document.getElementById('btnDiscover').disabled = false
+    document.getElementById('btnDiscover').textContent = 'Discover Modules'
+  }
+}
+
+function connectDiscoverySSE() {
+  const es = new EventSource('/api/module-discovery/stream')
+
+  es.addEventListener('log', (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'progress') {
+        const isHeader = /^Round |^Phase |^Writing |^Communities |^Found |^Boundary /.test(msg.message)
+        appendLog(isHeader ? 'layer' : 'info', msg.message)
+      }
+      else if (msg.type === 'started') appendLog('layer', `Module Discovery started: ${msg.repo}`)
+      else if (msg.type === 'done') appendLog('ok', `Done! ${msg.modules} modules, ${msg.totalTokens.toLocaleString()} tokens, ${(msg.durationMs/1000).toFixed(1)}s`)
+      else if (msg.type === 'error') appendLog('err', msg.error)
+    } catch {}
+  })
+
+  es.addEventListener('status', async (e) => {
+    es.close()
+    document.getElementById('btnDiscover').disabled = false
+    document.getElementById('btnDiscover').textContent = 'Discover Modules'
+    // Refresh stats + map
+    mapInitialized = false
+    loadStats(true)
+  })
+
+  es.onerror = () => {
+    es.close()
+    setTimeout(async () => {
+      try {
+        const res = await fetch('/api/module-discovery/results')
+        const data = await res.json()
+        if (data.status === 'running') connectDiscoverySSE()
+        else {
+          document.getElementById('btnDiscover').disabled = false
+          document.getElementById('btnDiscover').textContent = 'Discover Modules'
+          mapInitialized = false
+          loadStats(true)
+        }
+      } catch {
+        document.getElementById('btnDiscover').disabled = false
+        document.getElementById('btnDiscover').textContent = 'Discover Modules'
+      }
+    }, 2000)
+  }
+}
+
+async function initMap() {
+  mapInitialized = true
+  try {
+    const res = await fetch('/api/graph/modules')
+    mapData = await res.json()
+    if (!mapData.modules || mapData.modules.length === 0) return
+    renderMap()
+  } catch (err) { console.error('Map load failed:', err) }
+}
+
+function renderMap() {
+  const container = document.getElementById('mapContainer')
+  const W = container.clientWidth, H = container.clientHeight
+  const svg = d3.select('#mapSvg').attr('width', W).attr('height', H)
+  svg.selectAll('*').remove()
+
+  const g = svg.append('g')
+  const zoom = d3.zoom().scaleExtent([0.08, 3]).on('zoom', (e) => g.attr('transform', e.transform))
+  svg.call(zoom)
+
+  // Card dimensions based on content
+  const CARD_W = 220, ROW_H = 16
+  const nodes = mapData.modules
+    .map((m, i) => {
+      const subs = mapData.subModules.filter(s => s.parentId === m.id)
+      const rows = Math.min(subs.length, 14)
+      const cardH = 34 + rows * ROW_H + (subs.length > 14 ? 18 : 8) + (subs.length === 0 ? 24 : 0)
+      return { ...m, idx: i, subs, cardW: CARD_W, cardH, color: mColor(i) }
+    })
+    .sort((a, b) => b.fnCount - a.fnCount)
+
+  // Masonry grid layout — no physics, no jiggle
+  const GAP_X = 60, GAP_Y = 40
+  const cols = Math.max(1, Math.floor(2400 / (CARD_W + GAP_X)))
+  const colHeights = new Array(cols).fill(0)
+  nodes.forEach(n => {
+    let minCol = 0
+    for (let c = 1; c < cols; c++) { if (colHeights[c] < colHeights[minCol]) minCol = c }
+    n.x = minCol * (CARD_W + GAP_X)
+    n.y = colHeights[minCol]
+    colHeights[minCol] += n.cardH + GAP_Y
+  })
+
+  // Lookup for edges
+  const nodeLookup = {}
+  nodes.forEach(n => { nodeLookup[n.id] = n })
+
+  // Edges
+  const edges = mapData.edges
+    .filter(e => nodeLookup[e.source] && nodeLookup[e.target])
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 60)
+  const maxWeight = Math.max(...edges.map(e => e.weight), 1)
+
+  // Orthogonal connection paths (right edge → midpoint → left edge)
+  function orthoPath(sn, tn) {
+    const sx = sn.x + sn.cardW, sy = sn.y + sn.cardH / 2
+    const tx = tn.x,            ty = tn.y + tn.cardH / 2
+    // If target is to the left, swap direction
+    if (tx < sx) {
+      const ax = sn.x, ay = sy, bx = tn.x + tn.cardW, by = ty
+      const mx = Math.min(ax, bx) - 30
+      return `M${ax},${ay} H${mx} V${by} H${bx}`
+    }
+    const mx = (sx + tx) / 2
+    return `M${sx},${sy} H${mx} V${ty} H${tx}`
+  }
+
+  const edgeGroup = g.append('g')
+  const edgePaths = edgeGroup.selectAll('path').data(edges).join('path')
+    .attr('fill', 'none')
+    .attr('stroke', 'rgba(255,255,255,0.07)')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '6,4')
+    .attr('d', e => orthoPath(nodeLookup[e.source], nodeLookup[e.target]))
+
+  // Card groups — positioned at top-left corner
+  const cardGroups = g.selectAll('g.card').data(nodes).join('g')
+    .attr('class', 'card')
+    .attr('transform', d => `translate(${d.x},${d.y})`)
+
+  // HTML cards via foreignObject
+  cardGroups.each(function(d) {
+    const fo = d3.select(this).append('foreignObject')
+      .attr('width', d.cardW).attr('height', d.cardH)
+
+    const card = fo.append('xhtml:div').attr('class', 'mod-card')
+      .style('width', d.cardW + 'px').style('height', d.cardH + 'px')
+
+    const head = card.append('xhtml:div').attr('class', 'mod-card-head')
+      .style('border-left', `3px solid ${d.color}`)
+    head.append('xhtml:span').attr('class', 'mc-title').style('color', d.color).text(d.name)
+    head.append('xhtml:span').attr('class', 'mc-count').text(d.fnCount)
+
+    const body = card.append('xhtml:div').attr('class', 'mod-card-body')
+    d.subs.slice(0, 14).forEach(sub => {
+      const row = body.append('xhtml:div').attr('class', 'mod-card-row')
+      row.append('xhtml:span').attr('class', 'mcr-name').text(sub.name)
+      if (sub.fnCount) row.append('xhtml:span').attr('class', 'mcr-fns').text(sub.fnCount)
+    })
+    if (d.subs.length > 14) {
+      body.append('xhtml:div').attr('class', 'mod-card-row')
+        .style('color', 'rgba(255,255,255,0.2)').text(`+${d.subs.length - 14} more`)
+    }
+    if (d.subs.length === 0) {
+      body.append('xhtml:div').attr('class', 'mod-card-row')
+        .style('color', 'rgba(255,255,255,0.15)').style('padding', '4px 10px')
+        .text('no sub-modules yet')
+    }
+  })
+
+  // Drag — move card, redraw connected edges, no simulation
+  cardGroups.call(d3.drag().on('drag', function(e, d) {
+    d.x += e.dx; d.y += e.dy
+    d3.select(this).attr('transform', `translate(${d.x},${d.y})`)
+    edgePaths.attr('d', edge => orthoPath(nodeLookup[edge.source], nodeLookup[edge.target]))
+  }))
+
+  // Hover: highlight connected edges
+  cardGroups.on('mouseover', function(e, d) {
+    d3.select(this).select('.mod-card').style('border-color', d.color).style('box-shadow', `0 0 20px ${d.color}22`)
+    edgePaths.each(function(edge) {
+      const connected = edge.source === d.id || edge.target === d.id
+      d3.select(this)
+        .attr('stroke', connected ? d.color : 'rgba(255,255,255,0.03)')
+        .attr('stroke-width', connected ? Math.max(1.5, edge.weight / maxWeight * 3) : 0.5)
+        .attr('stroke-dasharray', connected ? 'none' : '6,4')
+    })
+  }).on('mouseout', function() {
+    d3.select(this).select('.mod-card').style('border-color', '').style('box-shadow', '')
+    edgePaths
+      .attr('stroke', 'rgba(255,255,255,0.07)').attr('stroke-width', 1).attr('stroke-dasharray', '6,4')
+  })
+
+  // Fit to view
+  requestAnimationFrame(() => {
+    const bounds = g.node().getBBox()
+    const pad = 50
+    const scale = Math.min(W / (bounds.width + pad * 2), H / (bounds.height + pad * 2), 1)
+    const tx = W / 2 - (bounds.x + bounds.width / 2) * scale
+    const ty = W > bounds.width + pad * 2 ? pad : H / 2 - (bounds.y + bounds.height / 2) * scale
+    svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
+  })
+}
+</script>
+</body>
+</html>

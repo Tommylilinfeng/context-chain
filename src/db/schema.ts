@@ -21,6 +21,9 @@ const CONSTRAINTS: string[] = [
   `CREATE CONSTRAINT ON (n:CodeEntity) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:DecisionContext) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:AggregatedSummary) ASSERT n.id IS UNIQUE`,
+  `CREATE CONSTRAINT ON (n:SubModule) ASSERT n.id IS UNIQUE`,
+  `CREATE CONSTRAINT ON (n:DesignChoice) ASSERT n.id IS UNIQUE`,
+  `CREATE CONSTRAINT ON (n:Theme) ASSERT n.id IS UNIQUE`,
 ]
 
 // ─────────────────────────────────────────────
@@ -46,6 +49,17 @@ const INDEXES: string[] = [
 
   // ── Project ─────────────────────────────────
   `CREATE INDEX ON :Project(name)`,
+
+  // ── SubModule ───────────────────────────────
+  `CREATE INDEX ON :SubModule(repo)`,
+  `CREATE INDEX ON :SubModule(parentModuleId)`,
+
+  // ── DesignChoice ────────────────────────────
+  `CREATE INDEX ON :DesignChoice(repo)`,
+
+  // ── Theme ───────────────────────────────────
+  `CREATE INDEX ON :Theme(repo)`,
+  `CREATE INDEX ON :Theme(scope)`,
 ]
 
 // ─────────────────────────────────────────────

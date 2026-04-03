@@ -58,6 +58,10 @@ import {
 } from '../ingestion/run-history'
 import { validateAIConfig } from '../ai'
 import { detectCommunities, analyzeConcerns, ConcernAnalysis } from '../ingestion/concern-analysis'
+import { runDesignAnalysis, DesignAnalysisOpts, analyzeModuleStats, backfillOrphanFunctions } from '../ingestion/design-analysis'
+import { DesignAnalysisResult } from '../prompts/design-analysis'
+import { discoverModules } from '../ingestion/module-discovery'
+import { DiscoveryResult } from '../prompts/module-discovery'
 
 const app = new Hono()
 app.use('*', cors())
@@ -4150,6 +4154,302 @@ app.get('/api/concerns/results', (c) => {
   })
 })
 
+// ── Module Discovery API ──────────────────────────────────
+
+interface ModuleDiscoveryJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  logs: LogBuffer
+  result: DiscoveryResult | null
+  startedAt: number
+}
+
+const moduleDiscoveryJob: ModuleDiscoveryJob = {
+  status: 'idle', logs: new LogBuffer(), result: null, startedAt: 0,
+}
+
+app.post('/api/module-discovery/run', async (c) => {
+  if (moduleDiscoveryJob.status === 'running') {
+    return c.json({ error: 'Module discovery already running' }, 409)
+  }
+
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  const body = await c.req.json().catch(() => ({}))
+  const repoName = body.repo || config.repos?.[0]?.name
+  const repoConfig = config.repos?.find((r: any) => r.name === repoName)
+  if (!repoConfig) return c.json({ error: `Repo "${repoName}" not found` }, 400)
+  const hubThreshold = body.hubThreshold ?? 20
+
+  moduleDiscoveryJob.status = 'running'
+  moduleDiscoveryJob.logs.clear()
+  moduleDiscoveryJob.result = null
+  moduleDiscoveryJob.startedAt = Date.now()
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'started', repo: repoName }))
+
+      const result = await discoverModules({
+        dbSession: session,
+        ai,
+        repo: repoName,
+        repoPath: repoConfig.path,
+        hubThreshold,
+        onProgress: (msg) => {
+          pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: msg }))
+        },
+      })
+
+      // Backfill orphan functions (no LLM, pure graph operations)
+      pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: 'Backfilling orphan functions...' }))
+      const backfill = await backfillOrphanFunctions(session, repoName, false, (msg) => {
+        pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: msg }))
+      })
+      pushLog(moduleDiscoveryJob.logs, JSON.stringify({
+        type: 'progress',
+        message: `Backfill done: +${backfill.fileLevelAdded} file-level, +${backfill.dirFunctionsAdded} in ${backfill.dirModulesCreated} dir-modules`,
+      }))
+
+      moduleDiscoveryJob.result = result
+      moduleDiscoveryJob.status = 'done'
+      pushLog(moduleDiscoveryJob.logs, JSON.stringify({
+        type: 'done',
+        modules: result.stats.finalModules,
+        totalTokens: result.stats.totalTokens,
+        durationMs: result.stats.durationMs,
+      }))
+      // Invalidate stats cache since modules changed
+      statsCache.clear()
+      ai.cleanup()
+    } catch (err: any) {
+      moduleDiscoveryJob.status = 'error'
+      pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started' })
+})
+
+app.get('/api/module-discovery/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = moduleDiscoveryJob.logs.readAfter(lastSeq)
+      for (const entry of entries) {
+        await stream.writeSSE({ data: entry, event: 'log' })
+      }
+      if (entries.length > 0) lastSeq = newSeq
+      if (moduleDiscoveryJob.status !== 'running' && moduleDiscoveryJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: moduleDiscoveryJob.status, event: 'status' })
+        break
+      }
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+app.get('/api/module-discovery/results', (c) => {
+  return c.json({
+    status: moduleDiscoveryJob.status,
+    result: moduleDiscoveryJob.result,
+  })
+})
+
+// ── Design Analysis API ───────────────────────────────────
+
+interface DesignAnalysisJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  logs: LogBuffer
+  result: DesignAnalysisResult | null
+  startedAt: number
+  abortRequested: boolean
+}
+
+const designAnalysisJob: DesignAnalysisJob = {
+  status: 'idle', logs: new LogBuffer(), result: null,
+  startedAt: 0, abortRequested: false,
+}
+
+app.post('/api/design-analysis/analyze', async (c) => {
+  if (designAnalysisJob.status === 'running') {
+    return c.json({ error: 'Design analysis already running' }, 409)
+  }
+
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  const body = await c.req.json().catch(() => ({}))
+  const repoName = body.repo || config.repos?.[0]?.name
+  const repoConfig = config.repos?.find((r: any) => r.name === repoName)
+  if (!repoConfig) return c.json({ error: `Repo "${repoName}" not found` }, 400)
+  const concurrency = body.concurrency ?? 5
+  const maxLinesPerFunction = body.maxLinesPerFunction ?? 0
+  const moduleIds = body.moduleId ? [body.moduleId] : body.moduleIds ?? undefined
+
+  designAnalysisJob.status = 'running'
+  designAnalysisJob.logs.clear()
+  designAnalysisJob.result = null
+  designAnalysisJob.startedAt = Date.now()
+  designAnalysisJob.abortRequested = false
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'started', repo: repoName, maxLinesPerFunction, moduleIds }))
+
+      const result = await runDesignAnalysis({
+        dbSession: session,
+        ai,
+        repo: repoName,
+        repoPath: repoConfig.path,
+        concurrency,
+        maxLinesPerFunction,
+        moduleIds,
+        shouldAbort: () => designAnalysisJob.abortRequested,
+        onProgress: (msg) => {
+          pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'progress', message: msg }))
+        },
+      })
+
+      designAnalysisJob.result = result
+      designAnalysisJob.status = 'done'
+      pushLog(designAnalysisJob.logs, JSON.stringify({
+        type: 'done',
+        totalTokens: result.totalTokens,
+        durationMs: result.durationMs,
+      }))
+      ai.cleanup()
+    } catch (err: any) {
+      designAnalysisJob.status = 'error'
+      pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started' })
+})
+
+app.post('/api/design-analysis/stop', (c) => {
+  if (designAnalysisJob.status === 'running') {
+    designAnalysisJob.abortRequested = true
+    pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'ok' })
+})
+
+app.get('/api/design-analysis/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = designAnalysisJob.logs.readAfter(lastSeq)
+      for (const entry of entries) {
+        await stream.writeSSE({ data: entry, event: 'log' })
+      }
+      if (entries.length > 0) lastSeq = newSeq
+
+      if (designAnalysisJob.status !== 'running' && designAnalysisJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: designAnalysisJob.status, event: 'status' })
+        break
+      }
+
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+app.get('/api/design-analysis/results', (c) => {
+  return c.json({
+    status: designAnalysisJob.status,
+    result: designAnalysisJob.result,
+  })
+})
+
+// Stats cache: keyed by repo name, computed once per dashboard lifetime
+const statsCache = new Map<string, { data: any; computedAt: number }>()
+
+app.get('/api/design-analysis/stats', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const repoConfig = config.repos?.find((r: any) => r.name === repoName)
+  if (!repoConfig) return c.json({ error: `Repo "${repoName}" not found` }, 400)
+  const force = c.req.query('force') === '1'
+
+  if (!force && statsCache.has(repoName)) {
+    return c.json(statsCache.get(repoName)!.data)
+  }
+
+  const session = await getSession()
+  try {
+    const stats = await analyzeModuleStats(session, repoName, repoConfig.path)
+    statsCache.set(repoName, { data: stats, computedAt: Date.now() })
+    return c.json(stats)
+  } finally {
+    await session.close()
+  }
+})
+
+// ── API: Module graph for visualization ─────────────────────
+
+app.get('/api/graph/modules', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+
+  const session = await getSession()
+  try {
+    // Q1: Modules with function counts
+    const modRes = await session.run(
+      `MATCH (sm:SemanticModule {repo: $repo})
+       OPTIONAL MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sm)
+       RETURN sm.id AS id, sm.name AS name, sm.description AS description, count(fn) AS fnCount`,
+      { repo: repoName }
+    )
+    const modules = modRes.records.map(r => ({
+      id: r.get('id'), name: r.get('name'), description: r.get('description') ?? '',
+      fnCount: typeof r.get('fnCount') === 'number' ? r.get('fnCount') : r.get('fnCount')?.toNumber?.() ?? 0,
+    }))
+
+    // Q2: SubModules with parent
+    const subRes = await session.run(
+      `MATCH (sub:SubModule {repo: $repo})
+       RETURN sub.id AS id, sub.name AS name, sub.description AS description,
+              sub.parentModuleId AS parentId, sub.function_count AS fnCount`,
+      { repo: repoName }
+    )
+    const subModules = subRes.records.map(r => ({
+      id: r.get('id'), name: r.get('name'), description: r.get('description') ?? '',
+      parentId: r.get('parentId'),
+      fnCount: typeof r.get('fnCount') === 'number' ? r.get('fnCount') : r.get('fnCount')?.toNumber?.() ?? 0,
+    }))
+
+    // Q3: Cross-module edges (aggregated CALLS)
+    const edgeRes = await session.run(
+      `MATCH (a:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(smA:SemanticModule {repo: $repo})
+       MATCH (a)-[:CALLS]->(b:CodeEntity {entity_type: 'function'})
+       MATCH (b)-[:BELONGS_TO]->(smB:SemanticModule {repo: $repo})
+       WHERE smA.id <> smB.id
+       RETURN smA.id AS source, smB.id AS target, count(*) AS weight`,
+      { repo: repoName }
+    )
+    const edges = edgeRes.records.map(r => ({
+      source: r.get('source'), target: r.get('target'),
+      weight: typeof r.get('weight') === 'number' ? r.get('weight') : r.get('weight')?.toNumber?.() ?? 0,
+    }))
+
+    return c.json({ modules, subModules, edges })
+  } finally {
+    await session.close()
+  }
+})
+
 // ── API: Quota tracking setup ──────────────────────────────
 
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
@@ -4243,6 +4543,12 @@ app.post('/api/system/quota-tracking/disable', (c) => {
 })
 
 // ── Page Routes ───────────────────────────────────────────
+
+app.get('/design', (c) => {
+  const htmlPath = path.resolve(__dirname, 'public', 'design.html')
+  const html = fs.readFileSync(htmlPath, 'utf-8')
+  return c.html(html)
+})
 
 app.get('/concerns', (c) => {
   const htmlPath = path.resolve(__dirname, 'public', 'concerns.html')

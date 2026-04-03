@@ -265,6 +265,7 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+process.stdin.on('close', shutdown)
 
 main().catch(err => {
   process.stderr.write(`MCP Server failed to start: ${err.message}\n`)
