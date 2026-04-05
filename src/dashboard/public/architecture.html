@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CKG — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+.main { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+.content-area { flex:1; display:flex; overflow:hidden; min-height:0; }
+
+/* ── Main Panel ─────────────────────────── */
+.main-panel { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+.breadcrumb { padding:10px 20px; font-size:12px; color:var(--text-dim); border-bottom:1px solid var(--border-subtle); flex-shrink:0; }
+.breadcrumb a { color:var(--accent); text-decoration:none; cursor:pointer; }
+.breadcrumb a:hover { text-decoration:underline; }
+.breadcrumb span.sep { margin:0 6px; color:var(--text-dim); }
+.main-scroll { flex:1; overflow-y:auto; padding:20px 24px; }
+
+/* Module cards grid */
+.mod-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px; margin-top:16px; }
+.arch-card {
+  background:var(--surface-1); border:1px solid var(--border-subtle); border-radius:var(--radius);
+  padding:16px; cursor:pointer; transition:all 0.15s;
+}
+.arch-card:hover { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent), 0 4px 16px rgba(77,142,255,0.08); }
+.arch-card-title { font-size:14px; font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+.arch-card-title .color-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.arch-card-desc { font-size:12px; color:var(--text-secondary); line-height:1.5; margin-bottom:10px;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.arch-card-stats { display:flex; gap:12px; font-family:var(--mono); font-size:10px; color:var(--text-dim); }
+
+/* Markdown rendering */
+.md-content { font-family:var(--sans); font-size:13px; line-height:1.7; color:var(--text-secondary); }
+.md-content h1,.md-content h2,.md-content h3 { color:var(--text); margin:18px 0 8px; }
+.md-content h1 { font-size:20px; } .md-content h2 { font-size:16px; } .md-content h3 { font-size:14px; }
+.md-content p { margin:8px 0; }
+.md-content code { font-family:var(--mono); font-size:12px; background:var(--surface-2); padding:1px 5px; border-radius:3px; }
+.md-content pre { background:var(--surface-2); border:1px solid var(--border-subtle); border-radius:8px; padding:12px; overflow-x:auto; margin:10px 0; }
+.md-content pre code { background:none; padding:0; font-size:11px; line-height:1.6; }
+.md-content ul, .md-content ol { padding-left:20px; margin:8px 0; }
+.md-content li { margin:4px 0; }
+.md-content strong { color:var(--text); }
+
+/* SubModule list */
+.sub-list { margin-top:12px; }
+.sub-item {
+  display:flex; align-items:center; gap:12px; padding:10px 14px;
+  background:var(--surface-1); border:1px solid var(--border-subtle); border-radius:8px;
+  margin-bottom:6px; cursor:pointer; transition:all 0.15s;
+}
+.sub-item:hover { border-color:var(--accent); }
+.sub-item-name { font-size:13px; font-weight:600; flex:1; }
+.sub-item-desc { font-size:11px; color:var(--text-dim); flex:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sub-item-stat { font-family:var(--mono); font-size:10px; color:var(--text-dim); white-space:nowrap; }
+
+/* Function table */
+.fn-table { width:100%; border-collapse:collapse; margin-top:12px; }
+.fn-table th { text-align:left; font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase;
+  letter-spacing:0.5px; padding:6px 10px; border-bottom:1px solid var(--border); }
+.fn-table td { font-size:12px; padding:6px 10px; border-bottom:1px solid var(--border-subtle); }
+.fn-table tr { cursor:pointer; transition:background 0.1s; }
+.fn-table tr:hover { background:var(--surface-1); }
+.fn-table .fn-name { font-family:var(--mono); font-weight:600; color:var(--accent); }
+.fn-table .fn-file { font-family:var(--mono); font-size:10px; color:var(--text-dim); }
+
+/* Source code view */
+.source-block { background:var(--surface-2); border:1px solid var(--border-subtle); border-radius:8px;
+  padding:14px; margin:12px 0; overflow-x:auto; }
+.source-block pre { margin:0; font-family:var(--mono); font-size:11px; line-height:1.7; color:var(--text-secondary); white-space:pre; }
+.source-header { font-size:11px; font-family:var(--mono); color:var(--text-dim); margin-bottom:8px; }
+
+/* Call graph mini */
+.call-graph-section { display:flex; gap:20px; margin:12px 0; }
+.call-list { flex:1; }
+.call-list-title { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; margin-bottom:6px; }
+.call-list a { display:block; font-family:var(--mono); font-size:11px; color:var(--accent); padding:2px 0; cursor:pointer; text-decoration:none; }
+.call-list a:hover { text-decoration:underline; }
+
+/* Decision cards */
+.decision-card { background:var(--surface-1); border:1px solid var(--border-subtle); border-radius:8px; padding:12px; margin:6px 0; }
+.decision-card .dc-summary { font-size:12px; font-weight:600; color:var(--text); margin-bottom:4px; }
+.decision-card .dc-content { font-size:11px; color:var(--text-secondary); line-height:1.5; }
+
+/* Section titles */
+.section-label { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase;
+  letter-spacing:0.8px; margin:20px 0 8px; }
+
+/* Generate button bar */
+.gen-bar { display:flex; align-items:center; gap:10px; padding:12px 20px; border-bottom:1px solid var(--border-subtle);
+  background:var(--surface-0); flex-shrink:0; }
+.gen-bar .btn-primary, .gen-bar .btn-stop { width:auto; padding:6px 16px; font-size:12px; }
+
+/* ── Chat Panel ─────────────────────────── */
+.chat-panel {
+  width:350px; border-left:1px solid var(--border); display:flex; flex-direction:column;
+  background:var(--surface-0); flex-shrink:0;
+}
+.chat-context { padding:10px 14px; border-bottom:1px solid var(--border-subtle);
+  font-size:10px; color:var(--text-dim); background:var(--surface-1); }
+.chat-context strong { color:var(--text-secondary); }
+.chat-messages { flex:1; overflow-y:auto; padding:12px; }
+.chat-msg { margin-bottom:12px; }
+.chat-msg.user { text-align:right; }
+.chat-msg .bubble {
+  display:inline-block; max-width:90%; padding:8px 12px; border-radius:10px;
+  font-size:12px; line-height:1.5; text-align:left;
+}
+.chat-msg.user .bubble { background:var(--accent); color:#fff; border-bottom-right-radius:2px; }
+.chat-msg.assistant .bubble { background:var(--surface-2); color:var(--text-secondary); border-bottom-left-radius:2px; }
+.chat-input-bar { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border-subtle); }
+.chat-input-bar input {
+  flex:1; background:var(--surface-2); border:1px solid var(--border); border-radius:8px;
+  color:var(--text); font-family:var(--sans); font-size:12px; padding:8px 12px; outline:none;
+}
+.chat-input-bar input:focus { border-color:var(--accent); }
+.chat-input-bar button {
+  padding:8px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent);
+  color:#fff; font-size:12px; font-weight:600; cursor:pointer; font-family:var(--sans);
+}
+
+/* Loading */
+.arch-loading { display:flex; align-items:center; justify-content:center; padding:60px;
+  color:var(--text-dim); font-size:13px; gap:10px; }
+.arch-empty { text-align:center; padding:60px 20px; color:var(--text-dim); }
+.arch-empty h3 { font-size:16px; color:var(--text-secondary); margin-bottom:8px; }
+.arch-empty p { font-size:12px; line-height:1.6; max-width:400px; margin:0 auto; }
+</style>
+</head>
+<body>
+<nav class="sidebar" id="sidebar"></nav>
+<script src="/sidebar.js"></script>
+
+<div class="main">
+  <div class="page-hero">
+    <h2>Architecture</h2>
+    <p class="subtitle">Interactive architecture documentation and exploration</p>
+  </div>
+
+  <div class="gen-bar" id="genBar">
+    <button class="btn-primary" id="btnGen" onclick="generateDocs()">Generate Docs</button>
+    <button class="btn-stop" id="btnGenStop" onclick="stopGenerate()" style="display:none">Stop</button>
+    <span id="genStatus" style="font-size:11px;color:var(--text-dim)"></span>
+  </div>
+
+  <div class="content-area">
+    <div class="main-panel">
+      <div class="breadcrumb" id="breadcrumb">
+        <a onclick="navigateTo('system')">System</a>
+      </div>
+      <div class="main-scroll" id="mainScroll">
+        <div class="arch-empty" id="emptyState">
+          <h3>No architecture docs yet</h3>
+          <p>Click "Generate Docs" in the left panel to analyze the codebase architecture with LLM. This requires <a href="/design" style="color:var(--accent)">Design Analysis</a> to be completed first — it uses module/sub-module structure to generate per-module documentation with Mermaid diagrams.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-panel">
+      <div class="chat-context" id="chatContext">
+        <strong>Context:</strong> System overview
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-bar">
+        <input type="text" id="chatInput" placeholder="Ask about the architecture..." onkeydown="if(event.key==='Enter')sendChat()">
+        <button onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s) { return !s ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+// Markdown rendering with mermaid support
+mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: {
+  primaryColor: '#1a1f2a', primaryTextColor: '#e4e8f2', primaryBorderColor: '#4d8eff',
+  lineColor: '#4d8eff', secondaryColor: '#222834', tertiaryColor: '#141820',
+  fontFamily: 'DM Sans, sans-serif', fontSize: '12px',
+}})
+
+var mermaidCounter = 0
+var mermaidRenderer = new marked.Renderer()
+mermaidRenderer.code = function(obj) {
+  var code = typeof obj === 'object' ? obj.text : obj
+  var lang = typeof obj === 'object' ? obj.lang : arguments[1]
+  if (lang === 'mermaid') {
+    var id = 'mermaid-' + (++mermaidCounter)
+    return '<div class="mermaid-container" id="' + id + '">' + esc(code) + '</div>'
+  }
+  return '<pre><code>' + esc(code) + '</code></pre>'
+}
+marked.setOptions({ renderer: mermaidRenderer, breaks: true })
+
+function md(text) {
+  if (!text) return ''
+  return marked.parse(text)
+}
+
+function renderMermaidBlocks() {
+  document.querySelectorAll('.mermaid-container').forEach(function(el) {
+    if (el.getAttribute('data-rendered')) return
+    el.setAttribute('data-rendered', '1')
+    var code = el.textContent
+    var id = el.id || ('mermaid-' + (++mermaidCounter))
+    mermaid.render(id + '-svg', code).then(function(result) {
+      el.innerHTML = result.svg
+    }).catch(function(err) {
+      el.innerHTML = '<pre style="color:var(--red);font-size:11px">Mermaid error: ' + esc(err.message) + '</pre>'
+    })
+  })
+}
+
+const MCOLORS = ['#4d8eff','#a78bfa','#34d27b','#e8b931','#22d3ee','#f472b6','#fb923c','#f05656',
+  '#94a3b8','#67e8f9','#c084fc','#fbbf24','#34d399','#f87171','#60a5fa','#a3e635']
+
+// ── State ──────────────────────────────
+let archData = null      // full arch docs
+let moduleGraphData = {} // module graph data from /api/graph/modules
+let viewContext = { level: 'system' }
+let chatHistory = []
+
+// ── Navigation ─────────────────────────
+function navigateTo(level, id, extra) {
+  if (level === 'system') { viewContext = { level: 'system' }; renderSystem() }
+  else if (level === 'module') { viewContext = { level: 'module', moduleId: id, moduleName: extra }; renderModule(id) }
+  else if (level === 'submodule') { viewContext = { level: 'submodule', subModuleId: id, subModuleName: extra, moduleId: viewContext.moduleId, moduleName: viewContext.moduleName }; renderSubModule(id) }
+  else if (level === 'function') { viewContext = { level: 'function', ...extra }; renderFunction(extra) }
+  updateBreadcrumb()
+  updateChatContext()
+}
+
+function updateBreadcrumb() {
+  var bc = document.getElementById('breadcrumb')
+  var parts = ['<a onclick="navigateTo(\'system\')">System</a>']
+  if (viewContext.level !== 'system' && viewContext.moduleName) {
+    parts.push('<a onclick="navigateTo(\'module\',\'' + esc(viewContext.moduleId) + '\',\'' + esc(viewContext.moduleName) + '\')">' + esc(viewContext.moduleName) + '</a>')
+  }
+  if ((viewContext.level === 'submodule' || viewContext.level === 'function') && viewContext.subModuleName) {
+    parts.push('<a onclick="navigateTo(\'submodule\',\'' + esc(viewContext.subModuleId) + '\',\'' + esc(viewContext.subModuleName) + '\')">' + esc(viewContext.subModuleName) + '</a>')
+  }
+  if (viewContext.level === 'function' && viewContext.functionName) {
+    parts.push('<span>' + esc(viewContext.functionName) + '</span>')
+  }
+  bc.innerHTML = parts.join('<span class="sep">/</span>')
+}
+
+function updateChatContext() {
+  var el = document.getElementById('chatContext')
+  var label = 'System overview'
+  if (viewContext.level === 'module') label = 'Module: ' + viewContext.moduleName
+  else if (viewContext.level === 'submodule') label = 'SubModule: ' + viewContext.subModuleName
+  else if (viewContext.level === 'function') label = 'Function: ' + viewContext.functionName
+  el.innerHTML = '<strong>Context:</strong> ' + esc(label)
+}
+
+// ── System Level ───────────────────────
+async function renderSystem() {
+  var el = document.getElementById('mainScroll')
+
+  if (!archData) {
+    // Try loading
+    try {
+      var res = await fetch('/api/arch-docs/overview')
+      if (res.ok) {
+        archData = await res.json()
+      }
+    } catch (e) {}
+  }
+
+  if (!archData || !archData.modules || archData.modules.length === 0) {
+    el.innerHTML = '<div class="arch-empty"><h3>No architecture docs yet</h3><p>Click "Generate Docs" to analyze the codebase architecture. Requires <a href="/design" style="color:var(--accent)">Design Analysis</a> first.</p></div>'
+    return
+  }
+
+  // Also load module graph data for counts
+  try {
+    var gres = await fetch('/api/graph/modules')
+    if (gres.ok) moduleGraphData = await gres.json()
+  } catch (e) {}
+
+  var fnCounts = {}
+  var subCounts = {}
+  if (moduleGraphData.modules) {
+    moduleGraphData.modules.forEach(function(m) { fnCounts[m.id] = m.fnCount })
+  }
+  if (moduleGraphData.subModules) {
+    moduleGraphData.subModules.forEach(function(s) {
+      subCounts[s.parentId] = (subCounts[s.parentId] || 0) + 1
+    })
+  }
+
+  var html = ''
+  if (archData.globalOverview) {
+    html += '<div class="md-content">' + md(archData.globalOverview) + '</div>'
+  }
+
+  html += '<div class="section-label">Modules (' + archData.modules.length + ')</div>'
+  html += '<div class="mod-grid">'
+  archData.modules.forEach(function(m, i) {
+    var color = MCOLORS[i % MCOLORS.length]
+    var fns = fnCounts[m.moduleId] || '?'
+    var subs = subCounts[m.moduleId] || '?'
+    html += '<div class="arch-card" onclick="navigateTo(\'module\',\'' + esc(m.moduleId) + '\',\'' + esc(m.moduleId) + '\')">'
+      + '<div class="arch-card-title"><span class="color-dot" style="background:' + color + '"></span>' + esc(m.responsibility ? m.responsibility.split('.')[0] + '.' : m.moduleId) + '</div>'
+      + '<div class="arch-card-desc">' + esc(m.overview ? m.overview.slice(0, 200) : '') + '</div>'
+      + '<div class="arch-card-stats"><span>' + fns + ' fns</span><span>' + subs + ' sub-modules</span>'
+      + (m.scenarioRoles ? '<span>' + m.scenarioRoles.length + ' scenarios</span>' : '')
+      + '</div></div>'
+  })
+  html += '</div>'
+  el.innerHTML = html
+  setTimeout(renderMermaidBlocks, 50)
+
+  // Update module names from graph data for proper display
+  if (moduleGraphData.modules) {
+    archData.modules.forEach(function(m) {
+      var gm = moduleGraphData.modules.find(function(g) { return g.id === m.moduleId })
+      if (gm) m._displayName = gm.name
+    })
+  }
+}
+
+// ── Module Level ───────────────────────
+async function renderModule(moduleId) {
+  var el = document.getElementById('mainScroll')
+  el.innerHTML = '<div class="arch-loading"><div class="loading-spinner"></div>Loading module...</div>'
+
+  try {
+    var res = await fetch('/api/arch-docs/module/' + encodeURIComponent(moduleId))
+    var doc = await res.json()
+    if (doc.error) throw new Error(doc.error)
+
+    // Get module name from graph
+    var modName = moduleId
+    if (moduleGraphData.modules) {
+      var gm = moduleGraphData.modules.find(function(m) { return m.id === moduleId })
+      if (gm) modName = gm.name
+    }
+    viewContext.moduleName = modName
+    updateBreadcrumb()
+
+    var html = '<h2 style="margin-top:0">' + esc(modName) + '</h2>'
+
+    if (doc.responsibility) {
+      html += '<div class="md-content" style="margin-bottom:16px;font-size:14px;color:var(--text)">' + md(doc.responsibility) + '</div>'
+    }
+    if (doc.overview) {
+      html += '<div class="section-label">Architecture Overview</div>'
+      html += '<div class="md-content">' + md(doc.overview) + '</div>'
+    }
+
+    // Key design decisions
+    if (doc.keyDesignDecisions && doc.keyDesignDecisions.length > 0) {
+      html += '<div class="section-label">Key Design Decisions</div>'
+      doc.keyDesignDecisions.forEach(function(d) {
+        html += '<div class="decision-card"><div class="dc-summary">' + md(d) + '</div></div>'
+      })
+    }
+
+    // Cross-module relationships
+    if (doc.crossModuleRelationships && doc.crossModuleRelationships.length > 0) {
+      html += '<div class="section-label">Cross-Module Relationships</div>'
+      doc.crossModuleRelationships.forEach(function(r) {
+        var arrow = r.direction === 'outgoing' ? ' ->' : r.direction === 'incoming' ? ' <-' : ' <->'
+        html += '<div style="font-size:12px;padding:4px 0;color:var(--text-secondary)">'
+          + '<span style="color:var(--accent)">' + arrow + '</span> '
+          + '<strong>' + esc(r.targetModuleId) + '</strong>: ' + esc(r.relationship) + '</div>'
+      })
+    }
+
+    // Scenario involvement
+    if (doc.scenarioRoles && doc.scenarioRoles.length > 0) {
+      html += '<div class="section-label">Scenario Involvement</div>'
+      doc.scenarioRoles.forEach(function(s) {
+        html += '<div style="font-size:12px;padding:4px 0;color:var(--text-secondary)">'
+          + '<strong>' + esc(s.scenarioName) + '</strong>: ' + esc(s.role) + '</div>'
+      })
+    }
+
+    // SubModules (clickable list)
+    html += '<div class="section-label">Sub-Modules</div><div class="sub-list">'
+    var summaries = doc.subModuleSummaries || []
+    // Also get full submodule list from graph
+    if (moduleGraphData.subModules) {
+      var graphSubs = moduleGraphData.subModules.filter(function(s) { return s.parentId === moduleId })
+      graphSubs.sort(function(a, b) { return (b.fnCount || 0) - (a.fnCount || 0) })
+      graphSubs.forEach(function(gs) {
+        var summary = summaries.find(function(s) { return s.subModuleId === gs.id })
+        html += '<div class="sub-item" onclick="navigateTo(\'submodule\',\'' + esc(gs.id) + '\',\'' + esc(gs.name) + '\')">'
+          + '<div class="sub-item-name">' + esc(gs.name) + '</div>'
+          + '<div class="sub-item-desc">' + esc(summary ? summary.summary : gs.description || '') + '</div>'
+          + '<div class="sub-item-stat">' + (gs.fnCount || '?') + ' fns</div>'
+          + '</div>'
+      })
+    }
+    html += '</div>'
+
+    el.innerHTML = html
+    setTimeout(renderMermaidBlocks, 50)
+    // Store current doc for chat context
+    viewContext.currentDoc = doc.overview
+  } catch (err) {
+    el.innerHTML = '<div class="arch-empty"><h3 style="color:var(--red)">' + esc(err.message) + '</h3></div>'
+  }
+}
+
+// ── SubModule Level ────────────────────
+async function renderSubModule(subModuleId) {
+  var el = document.getElementById('mainScroll')
+  el.innerHTML = '<div class="arch-loading"><div class="loading-spinner"></div>Loading sub-module...</div>'
+
+  try {
+    var res = await fetch('/api/arch-docs/submodule/' + encodeURIComponent(subModuleId))
+    var data = await res.json()
+    if (data.error) throw new Error(data.error)
+
+    viewContext.subModuleName = data.name
+    viewContext.moduleId = data.parentModuleId
+    viewContext.moduleName = data.parentModuleName
+    updateBreadcrumb()
+
+    var html = '<h2 style="margin-top:0">' + esc(data.name) + '</h2>'
+    if (data.description) {
+      html += '<div class="md-content" style="margin-bottom:16px">' + md(data.description) + '</div>'
+    }
+    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:16px">Part of <strong>' + esc(data.parentModuleName) + '</strong></div>'
+
+    // Design decisions
+    if (data.decisions && data.decisions.length > 0) {
+      html += '<div class="section-label">Design Decisions (' + data.decisions.length + ')</div>'
+      data.decisions.forEach(function(d) {
+        html += '<div class="decision-card">'
+          + '<div class="dc-summary">' + esc(d.summary) + '</div>'
+          + (d.content ? '<div class="dc-content">' + esc(d.content) + '</div>' : '')
+          + (d.anchorFunction ? '<div style="font-size:10px;color:var(--text-dim);margin-top:4px">@ ' + esc(d.anchorFunction) + '</div>' : '')
+          + '</div>'
+      })
+    }
+
+    // Functions table
+    html += '<div class="section-label">Functions (' + data.functions.length + ')</div>'
+    html += '<table class="fn-table"><thead><tr><th>Function</th><th>File</th><th>Lines</th><th>Callers</th></tr></thead><tbody>'
+    data.functions.forEach(function(f) {
+      html += '<tr onclick="navigateTo(\'function\',null,' + esc(JSON.stringify({
+        functionName: f.name, filePath: f.filePath,
+        moduleId: viewContext.moduleId, moduleName: viewContext.moduleName,
+        subModuleId: subModuleId, subModuleName: viewContext.subModuleName
+      })).replace(/"/g, '&quot;') + ')">'
+        + '<td class="fn-name">' + esc(f.name) + '</td>'
+        + '<td class="fn-file">' + esc(f.filePath) + '</td>'
+        + '<td>' + f.lineStart + '-' + f.lineEnd + '</td>'
+        + '<td>' + f.callerCount + '</td>'
+        + '</tr>'
+    })
+    html += '</tbody></table>'
+
+    el.innerHTML = html
+    viewContext.currentDoc = data.description
+  } catch (err) {
+    el.innerHTML = '<div class="arch-empty"><h3 style="color:var(--red)">' + esc(err.message) + '</h3></div>'
+  }
+}
+
+// ── Function Level ─────────────────────
+async function renderFunction(ctx) {
+  var el = document.getElementById('mainScroll')
+  el.innerHTML = '<div class="arch-loading"><div class="loading-spinner"></div>Loading function...</div>'
+
+  try {
+    var res = await fetch('/api/arch-docs/function?name=' + encodeURIComponent(ctx.functionName) + '&file=' + encodeURIComponent(ctx.filePath))
+    var data = await res.json()
+    if (data.error) throw new Error(data.error)
+
+    viewContext.functionName = ctx.functionName
+    updateBreadcrumb()
+
+    var html = '<h2 style="margin-top:0;font-family:var(--mono)">' + esc(ctx.functionName) + '</h2>'
+    html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:16px;font-family:var(--mono)">'
+      + esc(data.filePath) + ':' + data.lineStart + '-' + data.lineEnd + '</div>'
+
+    // Context badges
+    if (data.modules && data.modules.length > 0) {
+      html += '<div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">'
+      data.modules.forEach(function(m) {
+        if (m.name) html += '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:rgba(77,142,255,0.1);color:var(--accent)">' + esc(m.name) + '</span>'
+      })
+      data.subModules.forEach(function(s) {
+        if (s.name) html += '<span style="font-size:10px;padding:2px 8px;border-radius:100px;background:rgba(52,210,123,0.1);color:var(--green)">' + esc(s.name) + '</span>'
+      })
+      html += '</div>'
+    }
+
+    // Source code
+    if (data.sourceCode) {
+      html += '<div class="section-label">Source Code</div>'
+      html += '<div class="source-block"><div class="source-header">' + esc(data.filePath) + ':' + data.lineStart + '</div>'
+        + '<pre>' + esc(data.sourceCode) + '</pre></div>'
+      viewContext.sourceCode = data.sourceCode
+    }
+
+    // Call graph
+    html += '<div class="call-graph-section">'
+    html += '<div class="call-list"><div class="call-list-title">Callers (' + data.callers.length + ')</div>'
+    data.callers.forEach(function(c) {
+      html += '<a onclick="navigateTo(\'function\',null,' + esc(JSON.stringify({
+        functionName: c.name, filePath: c.filePath,
+        moduleId: viewContext.moduleId, moduleName: viewContext.moduleName,
+        subModuleId: viewContext.subModuleId, subModuleName: viewContext.subModuleName
+      })).replace(/"/g, '&quot;') + ')">' + esc(c.name) + ' <span style="color:var(--text-dim);font-size:9px">' + esc(c.filePath.split('/').pop()) + '</span></a>'
+    })
+    if (data.callers.length === 0) html += '<div style="font-size:11px;color:var(--text-dim)">(none)</div>'
+    html += '</div>'
+
+    html += '<div class="call-list"><div class="call-list-title">Callees (' + data.callees.length + ')</div>'
+    data.callees.forEach(function(c) {
+      html += '<a onclick="navigateTo(\'function\',null,' + esc(JSON.stringify({
+        functionName: c.name, filePath: c.filePath,
+        moduleId: viewContext.moduleId, moduleName: viewContext.moduleName,
+        subModuleId: viewContext.subModuleId, subModuleName: viewContext.subModuleName
+      })).replace(/"/g, '&quot;') + ')">' + esc(c.name) + ' <span style="color:var(--text-dim);font-size:9px">' + esc(c.filePath.split('/').pop()) + '</span></a>'
+    })
+    if (data.callees.length === 0) html += '<div style="font-size:11px;color:var(--text-dim)">(none)</div>'
+    html += '</div></div>'
+
+    // Decisions
+    if (data.decisions && data.decisions.length > 0) {
+      html += '<div class="section-label">Design Decisions</div>'
+      data.decisions.forEach(function(d) {
+        html += '<div class="decision-card"><div class="dc-summary">' + esc(d.summary) + '</div>'
+          + (d.content ? '<div class="dc-content">' + esc(d.content) + '</div>' : '') + '</div>'
+      })
+    }
+
+    el.innerHTML = html
+  } catch (err) {
+    el.innerHTML = '<div class="arch-empty"><h3 style="color:var(--red)">' + esc(err.message) + '</h3></div>'
+  }
+}
+
+// ── Chat ───────────────────────────────
+async function sendChat() {
+  var input = document.getElementById('chatInput')
+  var msg = input.value.trim()
+  if (!msg) return
+  input.value = ''
+
+  appendChatMsg('user', msg)
+  chatHistory.push({ role: 'user', content: msg })
+
+  var thinkingEl = appendChatMsg('assistant', 'Thinking...')
+
+  try {
+    var es = new EventSource('/api/arch-docs/chat?' + new URLSearchParams({
+      // We'll use POST via fetch instead
+    }))
+    // Use fetch + SSE workaround
+    var res = await fetch('/api/arch-docs/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: msg,
+        context: {
+          level: viewContext.level,
+          moduleName: viewContext.moduleName,
+          subModuleName: viewContext.subModuleName,
+          functionName: viewContext.functionName,
+          filePath: viewContext.filePath,
+          currentDoc: viewContext.currentDoc ? viewContext.currentDoc.slice(0, 2000) : undefined,
+          sourceCode: viewContext.sourceCode ? viewContext.sourceCode.slice(0, 1500) : undefined,
+        },
+        history: chatHistory.slice(-6),
+      }),
+    })
+
+    // Read SSE from response
+    var reader = res.body.getReader()
+    var decoder = new TextDecoder()
+    var fullText = ''
+    var buffer = ''
+
+    while (true) {
+      var result = await reader.read()
+      if (result.done) break
+      buffer += decoder.decode(result.value, { stream: true })
+
+      // Parse SSE events from buffer
+      var lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i]
+        if (line.startsWith('data:')) {
+          var eventData = line.slice(5).trim()
+          if (eventData === 'done') continue
+          try {
+            var parsed = JSON.parse(eventData)
+            if (parsed.text) fullText = parsed.text
+            if (parsed.error) fullText = 'Error: ' + parsed.error
+          } catch (e) {}
+        }
+      }
+    }
+
+    thinkingEl.querySelector('.bubble').innerHTML = md(fullText) || 'No response'
+    chatHistory.push({ role: 'assistant', content: fullText })
+  } catch (err) {
+    thinkingEl.querySelector('.bubble').textContent = 'Error: ' + err.message
+  }
+}
+
+function appendChatMsg(role, text) {
+  var el = document.getElementById('chatMessages')
+  var div = document.createElement('div')
+  div.className = 'chat-msg ' + role
+  div.innerHTML = '<div class="bubble">' + esc(text) + '</div>'
+  el.appendChild(div)
+  el.scrollTop = el.scrollHeight
+  return div
+}
+
+// ── Generate Docs (SSE) ────────────────
+async function generateDocs() {
+  document.getElementById('btnGen').disabled = true
+  document.getElementById('btnGenStop').style.display = ''
+  document.getElementById('genStatus').textContent = 'Generating...'
+
+  try {
+    await fetch('/api/arch-docs/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    var es = new EventSource('/api/arch-docs/stream')
+    es.addEventListener('log', function(e) {
+      try {
+        var msg = JSON.parse(e.data)
+        if (msg.type === 'progress') document.getElementById('genStatus').textContent = msg.message
+        else if (msg.type === 'done') document.getElementById('genStatus').textContent = 'Done! ' + msg.modules + ' modules, ' + (msg.tokens || 0).toLocaleString() + ' tokens'
+        else if (msg.type === 'error') document.getElementById('genStatus').textContent = 'Error: ' + msg.error
+      } catch (err) {}
+    })
+    es.addEventListener('status', function(e) {
+      es.close()
+      document.getElementById('btnGen').disabled = false
+      document.getElementById('btnGenStop').style.display = 'none'
+      archData = null
+      navigateTo('system')
+    })
+    es.onerror = function() {
+      es.close()
+      setTimeout(function() {
+        document.getElementById('btnGen').disabled = false
+        document.getElementById('btnGenStop').style.display = 'none'
+        archData = null
+        navigateTo('system')
+      }, 2000)
+    }
+  } catch (err) {
+    document.getElementById('genStatus').textContent = 'Error: ' + err.message
+    document.getElementById('btnGen').disabled = false
+    document.getElementById('btnGenStop').style.display = 'none'
+  }
+}
+
+function stopGenerate() {
+  fetch('/api/arch-docs/stop', { method: 'POST' })
+}
+
+// ── Init ───────────────────────────────
+navigateTo('system')
+</script>
+</body>
+</html>

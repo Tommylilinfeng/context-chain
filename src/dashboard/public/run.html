@@ -146,8 +146,8 @@
         <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:8px 0">
           <input type="checkbox" id="clusterMode" checked>
           <div>
-            <div style="font-weight:600">Cluster Analysis</div>
-            <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Group by call graph, deduplicate shared context</div>
+            <div style="font-weight:600">Cluster Analysis <span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(52,210,123,0.1);color:var(--green);font-weight:700;vertical-align:middle">RECOMMENDED</span></div>
+            <div style="font-size:11px;color:var(--text-dim);margin-top:2px">Groups related functions by call graph, then analyzes each cluster together. Saves tokens by deduplicating shared callers/callees across functions in the same cluster.</div>
           </div>
         </label>
       </div>
@@ -211,14 +211,15 @@
       </div>
 
       <div id="contextModules" style="display:none">
-        <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;margin-top:8px">
-          <label style="cursor:pointer"><input type="checkbox" id="mod-callerCode" checked> Caller code</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-calleeCode" checked> Callee code</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-twoHopNames" checked> 2-hop names</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-existingDecisions" checked> Existing decisions</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-businessContext" checked> Business context</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-fileContext"> File context</label>
-          <label style="cursor:pointer"><input type="checkbox" id="mod-tableAccess"> Table access</label>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:8px;margin-bottom:6px">LLM can request additional context each round. Checked = available on request:</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+          <label style="cursor:pointer"><input type="checkbox" id="mod-callerCode" checked> Caller code <span style="color:var(--text-dim);font-size:10px">— who calls this function</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-calleeCode" checked> Callee code <span style="color:var(--text-dim);font-size:10px">— what this function calls</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-twoHopNames" checked> 2-hop names <span style="color:var(--text-dim);font-size:10px">— indirect callers/callees</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-existingDecisions" checked> Existing decisions <span style="color:var(--text-dim);font-size:10px">— avoid duplicates</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-businessContext" checked> Business context <span style="color:var(--text-dim);font-size:10px">— README, config files</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-fileContext"> File context <span style="color:var(--text-dim);font-size:10px">— surrounding code in same file</span></label>
+          <label style="cursor:pointer"><input type="checkbox" id="mod-tableAccess"> Table access <span style="color:var(--text-dim);font-size:10px">— SQL tables used</span></label>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
           <span style="font-size:11px;color:var(--text-dim)">Max rounds:</span>
@@ -232,6 +233,15 @@
       <button class="btn-primary" id="startBtn">Start Analysis</button>
       <button class="btn-stop" id="stopBtn" style="display:none">Stop</button>
       <div id="inlineError" style="display:none;font-size:12px;color:var(--red);background:rgba(240,86,86,0.06);border:1px solid rgba(240,86,86,0.15);border-radius:6px;padding:8px 12px;margin-top:8px;line-height:1.5"></div>
+
+      <div class="next-steps" id="nextSteps">
+        <div class="ns-title">Next Steps</div>
+        <div class="ns-links">
+          <a class="ns-link" href="/group">Connect related decisions<span class="ns-arrow">→</span></a>
+          <a class="ns-link" href="/decisions">Browse extracted decisions<span class="ns-arrow">→</span></a>
+          <a class="ns-link" href="/design">Run design analysis<span class="ns-arrow">→</span></a>
+        </div>
+      </div>
     </div>
 
     <!-- ── Right: Output ── -->
@@ -276,7 +286,7 @@
         <div class="fn-list" id="fnList">
           <div class="empty-state">
             <div class="icon">🔬</div>
-            <p>Select a repository and click "Start Analysis" to begin analyzing functions one by one.</p>
+            <p>Select a repository on the left and click "Start Analysis". Each function in the codebase will be sent to the LLM to extract design decisions — why the code was written that way.</p>
           </div>
         </div>
 
@@ -350,6 +360,7 @@
       if (data.functions && data.functions.length > 0) renderFunctionList(data.functions)
       document.getElementById('currentFunction').textContent =
         data.status === 'done' ? 'Analysis complete' : 'Analysis failed — check logs'
+      if (data.status === 'done') document.getElementById('nextSteps').classList.add('visible')
     }
   }).catch(() => {})
 
@@ -500,6 +511,7 @@
         }
       } catch {}
       document.getElementById('currentFunction').textContent = 'Analysis complete'
+      document.getElementById('nextSteps').classList.add('visible')
       eventSource.close()
       eventSource = null
     })

@@ -156,18 +156,18 @@ export function buildSubModulePrompt(input: SubModuleInput): string {
       .join('\n\n')
     functionSection = fileSections
   } else {
-    // Compact format: name-only
-    const entries = Array.from(byFile.entries())
+    // Compact format: all function names grouped by directory
+    const byDir = new Map<string, string[]>()
+    for (const fn of input.functions) {
+      if (fn.name === ':program') continue
+      const parts = fn.filePath.split('/')
+      const dir = parts.slice(0, Math.min(2, parts.length - 1)).join('/') || '.'
+      if (!byDir.has(dir)) byDir.set(dir, [])
+      byDir.get(dir)!.push(fn.name)
+    }
+    functionSection = Array.from(byDir.entries())
       .sort((a, b) => b[1].length - a[1].length)
-    const isLarge = input.functions.length > 300
-    functionSection = entries
-      .map(([file, fns]) => {
-        const names = fns.map(f => f.name)
-        if (isLarge && names.length > 8) {
-          return `${file} (${names.length}): ${names.slice(0, 8).join(', ')}, ...`
-        }
-        return `${file}: ${names.join(', ')}`
-      })
+      .map(([dir, names]) => `${dir}/ (${names.length}): ${names.join(', ')}`)
       .join('\n')
   }
 
@@ -226,12 +226,30 @@ Guidelines:
 - Typical misassigned rate should be under 5% of functions; if you're flagging more than 10%, you're being too aggressive`
 }
 
+export interface SubModuleTarget {
+  subModuleId: string
+  name: string
+  description: string
+  parentModuleName: string
+}
+
+export interface SubModuleReassignment {
+  functionKey: string
+  targetSubModuleId: string
+  reasoning: string
+}
+
+export interface SubModuleReassignmentOutput {
+  reassignments: SubModuleReassignment[]
+  infrastructure: { functionKey: string; reasoning: string }[]
+}
+
 export function buildMisassignedReassignmentPrompt(
   misassigned: MisassignedFunction[],
-  allModules: { moduleId: string; name: string; description: string }[],
+  allSubModules: SubModuleTarget[],
 ): string {
-  const moduleList = allModules
-    .map(m => `  ${m.moduleId}: ${m.name} — ${m.description}`)
+  const subModuleList = allSubModules
+    .map(s => `  ${s.subModuleId}: ${s.name} (${s.parentModuleName}) — ${s.description}`)
     .join('\n')
 
   const fnList = misassigned
@@ -240,11 +258,11 @@ export function buildMisassignedReassignmentPrompt(
     reason: ${f.reason}${f.suggestedModule ? `\n    suggested: ${f.suggestedModule}` : ''}`)
     .join('\n\n')
 
-  return `You are reassigning functions that were flagged as misassigned during sub-module decomposition.
+  return `You are reassigning functions that were flagged as misassigned during sub-module decomposition. All sub-modules across the entire codebase have now been created. Your job is to assign each function directly to the correct sub-module.
 
-## All Available Modules
+## All Available Sub-Modules (${allSubModules.length} total)
 
-${moduleList}
+${subModuleList}
 
 ## Misassigned Functions (${misassigned.length} total)
 
@@ -253,15 +271,15 @@ ${fnList}
 ## Task
 
 For each function, decide:
-1. **Reassign** to the correct module (pick from the list above)
-2. **Infrastructure** — the function is a shared utility that doesn't belong to any specific module
+1. **Reassign** to the correct sub-module (pick from the list above by subModuleId)
+2. **Infrastructure** — the function is a shared utility that doesn't clearly belong to any specific sub-module
 
 Return ONLY raw JSON (no markdown, no backticks):
 {
   "reassignments": [
     {
       "functionKey": "path/file.ts::functionName",
-      "targetModuleId": "mod_3",
+      "targetSubModuleId": "mod_3_submod_2",
       "reasoning": "brief explanation"
     }
   ],
@@ -276,6 +294,7 @@ Return ONLY raw JSON (no markdown, no backticks):
 Guidelines:
 - Prefer reassignment over infrastructure — most functions belong somewhere
 - Use the suggestedModule hint when available, but verify it makes sense
+- Pick the sub-module that best matches the function's responsibility, not just the parent module
 - Infrastructure is for true cross-cutting utilities (logging, hashing, env detection)`
 }
 

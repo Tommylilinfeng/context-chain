@@ -134,6 +134,13 @@
         <span>■</span> Stop After Current Batch
       </button>
       <div id="inlineError" style="display:none;font-size:12px;color:var(--red);background:rgba(240,86,86,0.06);border:1px solid rgba(240,86,86,0.15);border-radius:6px;padding:8px 12px;margin-top:8px;line-height:1.5"></div>
+
+      <div class="next-steps" id="nextSteps">
+        <div class="ns-title">Done</div>
+        <div class="ns-links">
+          <a class="ns-link" href="/decisions">Browse translated decisions<span class="ns-arrow">→</span></a>
+        </div>
+      </div>
     </div>
 
     <!-- ── Right: Output ── -->
@@ -276,6 +283,7 @@
       setStatus('done')
       if (eventSource) { eventSource.close(); eventSource = null }
       loadStats()
+      document.getElementById('nextSteps').classList.add('visible')
     })
 
     eventSource.addEventListener('stopped', () => {
@@ -303,6 +311,13 @@
 
     eventSource.onerror = () => {
       if (eventSource) { eventSource.close(); eventSource = null }
+      // Auto-reconnect after 2s if job still running
+      setTimeout(() => {
+        fetch('/api/localize/status').then(r => r.json()).then(data => {
+          if (data.status === 'running') connectSSE()
+          else { setStatus(data.status === 'done' ? 'done' : 'idle'); loadStats() }
+        }).catch(() => {})
+      }, 2000)
     }
   }
 
@@ -341,10 +356,39 @@
   // ── Stop ──
   document.getElementById('stopBtn').addEventListener('click', async () => {
     try { await fetch('/api/localize/stop', { method: 'POST' }) } catch {}
+    // Poll until job actually stops (in case SSE is disconnected)
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch('/api/localize/status')
+        const data = await res.json()
+        if (data.status !== 'running') {
+          clearInterval(poll)
+          setStatus(data.status === 'done' ? 'done' : 'idle')
+          loadStats()
+        }
+      } catch { clearInterval(poll); setStatus('idle') }
+    }, 1500)
   })
 
   // ── Init ──
   loadStats()
+
+  // Check if already running (e.g. page refresh during active job)
+  fetch('/api/localize/status').then(r => r.json()).then(data => {
+    if (data.status === 'running') {
+      setStatus('running')
+      startTime = data.startedAt || Date.now()
+      document.getElementById('progressSection').style.display = 'block'
+      document.getElementById('logArea').innerHTML = ''
+      addLog('Reconnected to running job...', 'dim')
+      connectSSE()
+    } else if (data.status === 'done') {
+      setStatus('done')
+    } else if (data.status === 'interrupted') {
+      setStatus('error')
+      addLog('Previous run was interrupted (server restart). ' + data.translated + ' translated before interruption.', 'error')
+    }
+  }).catch(() => {})
 </script>
 </body>
 </html>

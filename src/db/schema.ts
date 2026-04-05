@@ -21,9 +21,11 @@ const CONSTRAINTS: string[] = [
   `CREATE CONSTRAINT ON (n:CodeEntity) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:DecisionContext) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:AggregatedSummary) ASSERT n.id IS UNIQUE`,
+  `CREATE CONSTRAINT ON (n:SemanticModule) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:SubModule) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:DesignChoice) ASSERT n.id IS UNIQUE`,
   `CREATE CONSTRAINT ON (n:Theme) ASSERT n.id IS UNIQUE`,
+  `CREATE CONSTRAINT ON (n:Scenario) ASSERT n.id IS UNIQUE`,
 ]
 
 // ─────────────────────────────────────────────
@@ -50,6 +52,9 @@ const INDEXES: string[] = [
   // ── Project ─────────────────────────────────
   `CREATE INDEX ON :Project(name)`,
 
+  // ── SemanticModule ───────────────────────────
+  `CREATE INDEX ON :SemanticModule(repo)`,
+
   // ── SubModule ───────────────────────────────
   `CREATE INDEX ON :SubModule(repo)`,
   `CREATE INDEX ON :SubModule(parentModuleId)`,
@@ -60,6 +65,10 @@ const INDEXES: string[] = [
   // ── Theme ───────────────────────────────────
   `CREATE INDEX ON :Theme(repo)`,
   `CREATE INDEX ON :Theme(scope)`,
+
+  // ── Scenario ────────────────────────────────
+  `CREATE INDEX ON :Scenario(repo)`,
+  `CREATE INDEX ON :Scenario(category)`,
 ]
 
 // ─────────────────────────────────────────────

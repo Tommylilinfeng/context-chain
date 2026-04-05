@@ -194,39 +194,118 @@
   animation:spin 0.6s linear infinite; margin-right:10px; display:inline-block; vertical-align:middle;
 }
 
-/* ── Module Map ────────────────────────────────── */
-.map-container { flex:1; position:relative; overflow:hidden; background:#08090c; }
+/* ── Module Map — PCB Board ───────────────────── */
+.map-container {
+  flex:1; position:relative; overflow:hidden;
+  background:#020a04;
+  background-image: radial-gradient(circle at 50% 50%, rgba(10,60,30,0.15) 0%, transparent 70%);
+}
 .map-container svg { width:100%; height:100%; display:block; }
 
-.mod-card {
+.pcb-toolbar {
+  display:flex; align-items:center; gap:10px; padding:8px 16px;
+  border-bottom:1px solid var(--border-subtle); background:var(--surface-0); flex-shrink:0;
+}
+.pcb-toolbar select {
+  background:var(--surface-2); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); font-family:var(--mono); font-size:11px; padding:5px 8px;
+}
+.pcb-toolbar label {
+  font-size:10px; color:var(--text-dim); font-family:var(--mono);
+  display:flex; align-items:center; gap:4px; cursor:pointer;
+}
+.pcb-toolbar input[type="checkbox"] { accent-color:var(--green); }
+.pcb-legend {
+  margin-left:auto; display:flex; gap:12px; font-size:9px;
+  font-family:var(--mono); color:var(--text-dim);
+}
+.pcb-legend span { display:flex; align-items:center; gap:4px; }
+.pcb-legend .swatch { width:10px; height:3px; border-radius:1px; }
+
+@keyframes copperPulse {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -20; }
+}
+@keyframes viaPulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+@keyframes signalFlow {
+  0%   { offset-distance: 0%; opacity:1; }
+  90%  { opacity:1; }
+  100% { offset-distance: 100%; opacity:0; }
+}
+
+/* ── Flow Tab ─────────────────────────────────── */
+.flow-toolbar {
+  display:flex; align-items:center; gap:10px; padding:10px 16px;
+  border-bottom:1px solid var(--border); background:var(--surface-0); flex-shrink:0;
+}
+.flow-toolbar select, .flow-toolbar input {
+  background:var(--surface-2); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); font-family:var(--mono);
+  font-size:12px; padding:6px 10px;
+}
+.flow-toolbar select { min-width:200px; }
+.flow-toolbar input { min-width:140px; }
+.flow-container { flex:1; position:relative; overflow:hidden; background:#08090c; }
+.flow-container svg { width:100%; height:100%; display:block; }
+
+/* Flow node cards */
+.flow-node {
   background:rgba(16,18,24,0.95); border:1px solid rgba(255,255,255,0.08);
-  border-radius:8px; overflow:hidden; cursor:grab; user-select:none;
-  box-shadow:0 2px 12px rgba(0,0,0,0.4);
-  transition:border-color 0.15s, box-shadow 0.15s;
-  min-width:140px;
+  border-radius:8px; padding:8px 12px; cursor:default; user-select:none;
+  box-shadow:0 2px 8px rgba(0,0,0,0.3); transition:all 0.15s;
+  min-width:120px; max-width:180px;
 }
-.mod-card:hover { border-color:rgba(255,255,255,0.18); box-shadow:0 4px 24px rgba(0,0,0,0.6); }
-.mod-card.active { cursor:grabbing; }
-.mod-card-head {
-  padding:8px 10px; display:flex; justify-content:space-between; align-items:center;
-  border-bottom:1px solid rgba(255,255,255,0.06);
-}
-.mod-card-head .mc-title {
+.flow-node:hover { border-color:rgba(255,255,255,0.2); box-shadow:0 4px 16px rgba(0,0,0,0.5); }
+.flow-node.dimmed { opacity:0.08; }
+.flow-node.highlighted { box-shadow:0 0 16px rgba(77,142,255,0.4); }
+.flow-node-name {
   font-family:var(--sans); font-size:11px; font-weight:600;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-.mod-card-head .mc-count {
+.flow-node-meta {
+  display:flex; align-items:center; gap:6px; margin-top:4px;
   font-family:var(--mono); font-size:9px; color:var(--text-dim);
-  white-space:nowrap; margin-left:8px;
 }
-.mod-card-body { padding:6px 0; max-height:200px; overflow:hidden; }
-.mod-card-row {
-  padding:2px 10px; font-family:var(--mono); font-size:9px;
-  color:rgba(255,255,255,0.35); display:flex; justify-content:space-between;
-  line-height:1.6;
+.flow-role-badge {
+  font-size:8px; font-weight:700; padding:1px 5px; border-radius:3px;
+  text-transform:uppercase; letter-spacing:0.5px;
 }
-.mod-card-row .mcr-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mod-card-row .mcr-fns { color:rgba(255,255,255,0.2); margin-left:6px; white-space:nowrap; }
+.flow-role-badge.entry { background:rgba(52,210,123,0.15); color:var(--green); }
+.flow-role-badge.processing { background:rgba(77,142,255,0.15); color:var(--accent); }
+.flow-role-badge.decision { background:rgba(232,185,49,0.15); color:var(--yellow); }
+.flow-role-badge.output { background:rgba(167,139,250,0.15); color:#a78bfa; }
+.flow-role-badge.cross-cutting { background:rgba(244,114,182,0.15); color:#f472b6; }
+
+/* Module region backgrounds */
+.flow-module-region {
+  rx:12; ry:12; stroke-width:1; stroke-dasharray:4,3;
+}
+
+/* Animated flow edges */
+.flow-edge {
+  fill:none; stroke-dasharray:8 4;
+  animation:flowAnim 1s linear infinite;
+}
+@keyframes flowAnim { to { stroke-dashoffset:-12; } }
+
+/* Flow edge label */
+.flow-edge-label {
+  font-family:var(--mono); font-size:8px; fill:rgba(255,255,255,0.3);
+  pointer-events:none;
+}
+
+/* Flow empty state */
+.flow-empty {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  height:100%; color:var(--text-dim); text-align:center; font-family:var(--sans);
+}
+.flow-empty h3 { font-size:16px; font-weight:400; color:var(--text-secondary); margin-bottom:6px; }
+.flow-empty p { font-size:12px; max-width:300px; line-height:1.6; }
+
+/* PCB — no old mod-card styles, chips rendered in SVG */
 </style>
 </head>
 <body>
@@ -234,9 +313,9 @@
 <script src="/sidebar.js"></script>
 
 <div class="main">
-  <div class="page-hero">
+  <div class="page-header">
     <h2>Design Analysis</h2>
-    <p class="subtitle">Sub-module decomposition, design choices, and theme discovery</p>
+    <div class="status-badge idle" id="statusBadge">IDLE</div>
   </div>
 
   <div class="content-area">
@@ -249,7 +328,7 @@
           <input type="number" id="hubThreshold" value="20" min="5" max="100">
         </div>
       </div>
-      <div class="hint">Functions with more inbound calls than this are removed before community detection.</div>
+      <div class="hint">Functions with more inbound calls than this threshold are treated as "hub" functions (e.g., logger, utils) and excluded from community detection to prevent them from merging unrelated modules. Lower = stricter filtering.</div>
       <button class="btn-secondary" id="btnDiscover" onclick="runModuleDiscovery()">Discover Modules</button>
 
       <hr class="divider">
@@ -282,6 +361,36 @@
       <div class="hint" id="runStatus"></div>
 
       <div class="results-box" id="resultsBox"></div>
+
+      <div class="next-steps" id="nextSteps">
+        <div class="ns-title">Next Steps</div>
+        <div class="ns-links">
+          <a class="ns-link" href="/architecture">View architecture docs<span class="ns-arrow">→</span></a>
+          <a class="ns-link" href="/decisions">Browse decisions<span class="ns-arrow">→</span></a>
+        </div>
+      </div>
+
+      <hr class="divider">
+      <div class="section-title">Misassigned Functions</div>
+      <div class="stats-summary visible" id="misassignedSummary" style="margin-bottom:8px">
+        <div>Pending: <span class="s-val" id="misassignedCount">-</span></div>
+      </div>
+      <button class="btn-primary" id="btnReassign" onclick="runReassign()" disabled>Reassign to Sub-Modules</button>
+      <button class="btn-stop" id="btnStopReassign" onclick="stopReassign()" style="display:none">Stop</button>
+      <div class="hint" id="reassignHint">Run sub-module decomposition first. Misassigned functions will be saved for batch reassignment.</div>
+
+      <hr class="divider">
+      <div class="section-title">Danger Zone</div>
+      <button class="btn-ghost" style="padding:6px 12px;font-size:11px;color:var(--red);border-color:var(--red)" onclick="deleteAllSubModules()">Delete All Sub-Modules</button>
+      <button class="btn-ghost" style="padding:6px 12px;font-size:11px;color:var(--red);border-color:var(--red);margin-top:4px" onclick="deleteAllDesign()">Delete All Design Data</button>
+
+      <hr class="divider">
+      <div class="section-title">Scenario Analysis</div>
+      <button class="btn-secondary" id="btnEdges" onclick="computeEdges()">Compute SubModule Edges</button>
+      <button class="btn-primary" id="btnScenario" onclick="discoverScenarios()" style="margin-top:6px">Discover Scenarios</button>
+      <button class="btn-stop" id="btnStopScenario" onclick="stopScenario()" style="display:none">Stop</button>
+      <div class="hint" id="scenarioHint">Compute submodule edges first, then discover scenarios.</div>
+      <div class="results-box" id="scenarioResultsBox"></div>
     </div>
 
     <!-- Right: Tabs -->
@@ -290,6 +399,7 @@
         <button class="tab-btn active" onclick="switchTab('modules')">Modules</button>
         <button class="tab-btn" onclick="switchTab('log')">Log <span class="log-counter" id="logCount"></span></button>
         <button class="tab-btn" onclick="switchTab('map')">Map</button>
+        <button class="tab-btn" onclick="switchTab('flow')">Flow</button>
       </div>
 
       <!-- Modules Tab -->
@@ -307,10 +417,39 @@
         <div class="log-scroll" id="logScroll"></div>
       </div>
 
-      <!-- Map Tab -->
+      <!-- Map Tab — PCB Board -->
       <div class="tab-panel" id="tab-map">
+        <div class="pcb-toolbar">
+          <select id="pcbScenarioSelect" onchange="highlightScenario()">
+            <option value="">All connections</option>
+          </select>
+          <label><input type="checkbox" id="pcbLabels" checked onchange="renderPCB()"> Labels</label>
+          <label><input type="checkbox" id="pcbVias" checked onchange="renderPCB()"> Vias</label>
+          <div class="pcb-legend">
+            <span><span class="swatch" style="background:#c87533"></span>Copper trace</span>
+            <span><span class="swatch" style="background:#4dff91"></span>Active signal</span>
+            <span><span class="swatch" style="background:#c8a84e"></span>Pad / Via</span>
+          </div>
+        </div>
         <div class="map-container" id="mapContainer">
           <svg id="mapSvg"></svg>
+        </div>
+      </div>
+
+      <!-- Flow Tab -->
+      <div class="tab-panel" id="tab-flow">
+        <div class="flow-toolbar">
+          <select id="scenarioSelect" onchange="loadScenarioFlow()">
+            <option value="">Select scenario...</option>
+          </select>
+          <input type="text" id="concernFilter" placeholder="Filter concern (e.g. auth)" oninput="debounceConcern()">
+        </div>
+        <div class="flow-container" id="flowContainer">
+          <svg id="flowSvg"></svg>
+          <div class="flow-empty" id="flowEmpty">
+            <h3>No scenario selected</h3>
+            <p>Discover scenarios using the left panel, then select one above to visualize the data flow.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -327,7 +466,7 @@ let runningModuleId = null
 // ── Tab switching ──────────────────────────────
 
 function switchTab(name) {
-  var tabs = ['modules', 'log', 'map']
+  var tabs = ['modules', 'log', 'map', 'flow']
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
     b.classList.toggle('active', tabs[i] === name)
   })
@@ -336,6 +475,7 @@ function switchTab(name) {
     if (el) el.classList.toggle('active', t === name)
   })
   if (name === 'map') initMap()
+  if (name === 'flow') initFlow()
 }
 
 // ── Load Stats ─────────────────────────────────
@@ -441,6 +581,9 @@ async function _startRun(extraBody, label) {
   document.getElementById('btnStop').style.display = ''
   document.querySelectorAll('.mod-run-btn').forEach(b => b.disabled = true)
   document.getElementById('resultsBox').classList.remove('visible')
+  document.getElementById('nextSteps').classList.remove('visible')
+  var badge = document.getElementById('statusBadge')
+  badge.textContent = 'RUNNING'; badge.className = 'status-badge running'
   document.getElementById('logScroll').innerHTML = ''
   logLines = 0
   updateLogCount()
@@ -478,20 +621,66 @@ async function _startRun(extraBody, label) {
 
 async function stopAnalysis() {
   await fetch('/api/design-analysis/stop', { method:'POST' })
-  document.getElementById('btnStop').style.display = 'none'
   appendLog('dim', 'Stopping...')
+  // Poll until job actually stops (in case SSE is disconnected)
+  const poll = setInterval(async () => {
+    try {
+      const res = await fetch('/api/design-analysis/results')
+      const data = await res.json()
+      if (data.status !== 'running') {
+        clearInterval(poll)
+        if (data.result) renderResults(data.result)
+        resetUI()
+        loadMisassigned()
+      }
+    } catch { clearInterval(poll); resetUI() }
+  }, 1500)
 }
 
 // ── SSE ────────────────────────────────────────
 
+// Helper: find moduleId by name from statsData
+function findModuleId(name) {
+  if (!statsData) return null
+  const mod = statsData.modules.find(m => m.moduleName === name)
+  return mod ? mod.moduleId : null
+}
+
+// Update a module card's visual state (running/done/error)
+function setModuleCardState(moduleName, state, detail) {
+  const id = findModuleId(moduleName)
+  if (!id) return
+  const card = document.getElementById('card-' + id)
+  const badge = document.getElementById('badge-' + id)
+  if (!card || !badge) return
+
+  card.classList.remove('running', 'done')
+  badge.classList.remove('running', 'done')
+
+  if (state === 'running') {
+    card.classList.add('running')
+    badge.textContent = detail || 'running...'
+    badge.classList.add('running')
+  } else if (state === 'done') {
+    card.classList.add('done')
+    badge.textContent = detail || 'done'
+    badge.classList.add('done')
+  } else if (state === 'error') {
+    card.style.borderColor = 'var(--red)'
+    badge.textContent = 'error'
+    badge.style.background = 'rgba(240,86,86,0.15)'
+    badge.style.color = 'var(--red)'
+  }
+}
+
 function connectSSE() {
+  if (eventSource) eventSource.close()
   eventSource = new EventSource('/api/design-analysis/stream')
 
   eventSource.addEventListener('log', (e) => {
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'progress') {
-        // Detect layer headers
         const isLayer = /^Layer \d|^Found \d|^Loading |^Filtered /.test(msg.message)
         appendLog(isLayer ? 'layer' : 'info', msg.message)
       }
@@ -499,23 +688,37 @@ function connectSSE() {
       else if (msg.type === 'done') appendLog('ok', `Done! ${msg.totalTokens.toLocaleString()} tokens, ${(msg.durationMs/1000).toFixed(1)}s`)
       else if (msg.type === 'error') appendLog('err', msg.error)
       else if (msg.type === 'stopping') appendLog('dim', 'Stopping...')
+      // Module-level progress (Run All updates per-card)
+      else if (msg.type === 'module-start') {
+        setModuleCardState(msg.moduleName, 'running', `${msg.index + 1}/${msg.total}`)
+        document.getElementById('runStatus').textContent = `Module ${msg.index + 1}/${msg.total}: ${msg.moduleName}`
+      }
+      else if (msg.type === 'module-done') {
+        setModuleCardState(msg.moduleName, 'done', `${msg.subModules} subs`)
+      }
+      else if (msg.type === 'module-error') {
+        setModuleCardState(msg.moduleName, 'error')
+        appendLog('err', `${msg.moduleName}: ${msg.error}`)
+      }
     } catch {}
   })
 
   eventSource.addEventListener('status', async (e) => {
     eventSource.close()
+    eventSource = null
     if (e.data === 'done' || e.data === 'error') {
       const res = await fetch('/api/design-analysis/results')
       const data = await res.json()
       if (data.result) renderResults(data.result)
-      // Refresh map data so new sub-modules show up
       mapInitialized = false
     }
     resetUI()
+    loadMisassigned()
   })
 
   eventSource.onerror = () => {
-    eventSource.close()
+    if (eventSource) { eventSource.close(); eventSource = null }
+    // Auto-reconnect after 2s if job still running
     setTimeout(async () => {
       try {
         const res = await fetch('/api/design-analysis/results')
@@ -546,6 +749,8 @@ function resetUI() {
   document.querySelectorAll('.mod-run-btn').forEach(b => b.disabled = false)
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null }
   document.getElementById('runStatus').textContent = ''
+  var badge = document.getElementById('statusBadge')
+  badge.textContent = 'DONE'; badge.className = 'status-badge done'
 
   // Clear running state on cards
   document.querySelectorAll('.module-card.running').forEach(c => c.classList.remove('running'))
@@ -574,15 +779,117 @@ function renderResults(r) {
   box.innerHTML = `<div class="section-title">Results</div>` + rows.map(([k,v]) =>
     `<div class="results-row"><span>${k}</span><span class="r-val">${v}</span></div>`
   ).join('')
+  document.getElementById('nextSteps').classList.add('visible')
 }
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;') }
 
 // ── Init ───────────────────────────────────────
 
+// ── Misassigned Functions ─────────────────────
+
+async function loadMisassigned() {
+  try {
+    const res = await fetch('/api/design-analysis/misassigned')
+    const data = await res.json()
+    document.getElementById('misassignedCount').textContent = data.count
+    document.getElementById('btnReassign').disabled = data.count === 0
+    if (data.count > 0) {
+      document.getElementById('reassignHint').textContent = data.count + ' functions ready for reassignment'
+    }
+  } catch {}
+}
+
+async function runReassign() {
+  document.getElementById('btnReassign').disabled = true
+  document.getElementById('btnStopReassign').style.display = ''
+  document.getElementById('logScroll').innerHTML = ''
+  logLines = 0; updateLogCount()
+  switchTab('log')
+
+  try {
+    await fetch('/api/design-analysis/reassign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    connectReassignSSE()
+  } catch (err) {
+    appendLog('err', err.message)
+    document.getElementById('btnReassign').disabled = false
+    document.getElementById('btnStopReassign').style.display = 'none'
+  }
+}
+
+function stopReassign() {
+  // Reassign doesn't have a stop endpoint yet, but UI reset
+  document.getElementById('btnStopReassign').style.display = 'none'
+}
+
+function connectReassignSSE() {
+  const es = new EventSource('/api/design-analysis/reassign/stream')
+  es.addEventListener('log', (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'progress') {
+        const isHeader = /^Layer |^Loaded |^Reassign/.test(msg.message)
+        appendLog(isHeader ? 'layer' : 'info', msg.message)
+      }
+      else if (msg.type === 'started') appendLog('layer', 'Reassignment started: ' + msg.repo)
+      else if (msg.type === 'done') appendLog('ok', 'Done! ' + msg.reassigned + ' reassigned, ' + msg.infrastructure + ' infrastructure, ' + (msg.tokens || 0).toLocaleString() + ' tokens')
+      else if (msg.type === 'error') appendLog('err', msg.error)
+    } catch {}
+  })
+  es.addEventListener('status', (e) => {
+    es.close()
+    document.getElementById('btnReassign').disabled = false
+    document.getElementById('btnStopReassign').style.display = 'none'
+    loadMisassigned()
+    mapInitialized = false
+  })
+  es.onerror = () => {
+    es.close()
+    setTimeout(() => {
+      document.getElementById('btnReassign').disabled = false
+      document.getElementById('btnStopReassign').style.display = 'none'
+      loadMisassigned()
+    }, 2000)
+  }
+}
+
+// ── Delete Operations ─────────────────────────
+
+async function deleteAllSubModules() {
+  if (!confirm('Delete ALL sub-modules? This cannot be undone.')) return
+  try {
+    const res = await fetch('/api/design-analysis/submodules', { method: 'DELETE' })
+    const data = await res.json()
+    appendLog('ok', 'Deleted ' + data.deleted + ' sub-modules')
+    loadStats(true)
+    mapInitialized = false
+    loadMisassigned()
+  } catch (err) { appendLog('err', err.message) }
+}
+
+async function deleteAllDesign() {
+  if (!confirm('Delete ALL design data (modules + sub-modules + scenarios)? This cannot be undone.')) return
+  try {
+    const res = await fetch('/api/design-analysis/all', { method: 'DELETE' })
+    const data = await res.json()
+    appendLog('ok', 'Deleted ' + data.deletedModules + ' modules, ' + data.deletedSubModules + ' sub-modules')
+    loadStats(true)
+    mapInitialized = false
+    flowInitialized = false
+    loadMisassigned()
+  } catch (err) { appendLog('err', err.message) }
+}
+
+// ── Init ───────────────────────────────────────
+
 ;(async () => {
   // Auto-load stats (cached on server, instant after first load)
   loadStats()
+  loadMisassigned()
 
   // Check if a job is already running
   try {
@@ -591,11 +898,17 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
     if (data.status === 'running') {
       document.getElementById('btnRun').disabled = true
       document.getElementById('btnStop').style.display = ''
-      document.getElementById('runStatus').textContent = 'Running...'
+      document.querySelectorAll('.mod-run-btn').forEach(b => b.disabled = true)
+      document.getElementById('runStatus').textContent = 'Reconnected to running job...'
+      var badge = document.getElementById('statusBadge')
+      badge.textContent = 'RUNNING'; badge.className = 'status-badge running'
       switchTab('log')
       connectSSE()
     } else if (data.status === 'done' && data.result) {
       renderResults(data.result)
+    } else if (data.status === 'interrupted') {
+      document.getElementById('runStatus').textContent = 'Previous run was interrupted (server restart)'
+      document.getElementById('runStatus').style.color = 'var(--yellow)'
     }
   } catch {}
 })()
@@ -683,146 +996,982 @@ function connectDiscoverySSE() {
 async function initMap() {
   mapInitialized = true
   try {
-    const res = await fetch('/api/graph/modules')
-    mapData = await res.json()
+    const [modRes, edgeRes, scenRes] = await Promise.all([
+      fetch('/api/graph/modules'),
+      fetch('/api/graph/submodule-edges'),
+      fetch('/api/scenarios'),
+    ])
+    mapData = await modRes.json()
+    const edgeData = await edgeRes.json()
+    mapData.subEdges = edgeData.edges || []
+    const scenData = await scenRes.json()
+    // Populate scenario selector
+    const sel = document.getElementById('pcbScenarioSelect')
+    while (sel.options.length > 1) sel.remove(1)
+    ;(scenData.scenarios || []).forEach(s => {
+      const opt = document.createElement('option')
+      opt.value = s.id
+      opt.textContent = s.name
+      sel.appendChild(opt)
+    })
     if (!mapData.modules || mapData.modules.length === 0) return
-    renderMap()
-  } catch (err) { console.error('Map load failed:', err) }
+    renderPCB()
+  } catch (err) { console.error('PCB load failed:', err) }
 }
 
-function renderMap() {
+// ── PCB Constants ────────────────────────────────
+const PCB = {
+  // Palette
+  boardBg:       '#051a0e',
+  boardSurface:  '#082818',
+  boardEdge:     '#0d3320',
+  boardEdgeSide: '#06200e',
+  copper:        '#c87533',
+  copperBright:  '#e8a96a',
+  copperDim:     'rgba(200,117,51,0.12)',
+  copperTrace:   'rgba(200,117,51,0.35)',
+  gold:          '#c8a84e',
+  goldBright:    '#ffd866',
+  silk:          '#d4d4d8',
+  silkDim:       'rgba(212,212,216,0.3)',
+  chipBody:      '#0c1014',
+  chipBorder:    'rgba(255,255,255,0.06)',
+  chipHighlight: 'rgba(255,255,255,0.12)',
+  via:           '#8b7355',
+  viaDrill:      '#030503',
+  viaRing:       '#a08860',
+  active:        '#4dff91',
+  activeGlow:    'rgba(77,255,145,0.3)',
+  gridDot:       'rgba(200,117,51,0.06)',
+
+  // Dimensions
+  chipMinW:      80,
+  chipMaxW:      180,
+  chipH:         36,
+  chipGap:       14,
+  chipPadSize:   5,
+  chipRadius:    3,
+  boardPad:      50,
+  boardRadius:   8,
+  boardThick:    8,
+  layerGap:      160,
+  traceW:        1.2,
+  viaR:          4,
+  viaDrillR:     1.5,
+  gridStep:      12,
+}
+
+// ── PCB Layout Engine ────────────────────────────
+
+function layoutPCBLayers(modules, subModules, subEdges) {
+  // Build adjacency weights between modules
+  const modWeight = {}
+  subEdges.forEach(e => {
+    const sParent = subModules.find(s => s.id === e.source)?.parentId
+    const tParent = subModules.find(s => s.id === e.target)?.parentId
+    if (sParent && tParent && sParent !== tParent) {
+      const key = [sParent, tParent].sort().join('|')
+      modWeight[key] = (modWeight[key] || 0) + (e.weight || 1)
+    }
+  })
+
+  // Sort modules: most total connections first (bottom = foundation)
+  const modConn = {}
+  modules.forEach(m => { modConn[m.id] = 0 })
+  Object.entries(modWeight).forEach(([key, w]) => {
+    const [a, b] = key.split('|')
+    if (modConn[a] !== undefined) modConn[a] += w
+    if (modConn[b] !== undefined) modConn[b] += w
+  })
+  const sorted = [...modules].sort((a, b) => modConn[b.id] - modConn[a.id])
+
+  // Assign layers (bottom-up: index 0 = most connected = bottom)
+  const layers = sorted.map((mod, layerIdx) => {
+    const subs = subModules.filter(s => s.parentId === mod.id)
+    const color = mColor(modules.indexOf(mod))
+
+    // Sort subs within layer by internal connectivity (greedy adjacency)
+    const subAdj = {}
+    subEdges.forEach(e => {
+      if (subs.find(s => s.id === e.source) && subs.find(s => s.id === e.target)) {
+        const k = e.source + '|' + e.target
+        subAdj[k] = (subAdj[k] || 0) + (e.weight || 1)
+      }
+    })
+
+    // Greedy ordering: start with highest-connected sub, place neighbors next
+    const placed = []
+    const remaining = [...subs].sort((a, b) => (b.fnCount || 0) - (a.fnCount || 0))
+    while (remaining.length) {
+      if (placed.length === 0) {
+        placed.push(remaining.shift())
+      } else {
+        // Find remaining sub most connected to last placed
+        const last = placed[placed.length - 1]
+        let bestIdx = 0, bestW = -1
+        remaining.forEach((s, i) => {
+          const w1 = subAdj[last.id + '|' + s.id] || 0
+          const w2 = subAdj[s.id + '|' + last.id] || 0
+          if (w1 + w2 > bestW) { bestW = w1 + w2; bestIdx = i }
+        })
+        placed.push(remaining.splice(bestIdx, 1)[0])
+      }
+    }
+
+    // Layout chips in rows within the board
+    const chipNodes = placed.map(sub => {
+      const fnC = sub.fnCount || 1
+      const w = Math.min(PCB.chipMaxW, Math.max(PCB.chipMinW, 50 + fnC * 3))
+      return { ...sub, chipW: w, chipH: PCB.chipH, color }
+    })
+
+    // Pack into rows
+    const maxRowW = Math.max(500, chipNodes.reduce((s, c) => s + c.chipW, 0) * 0.55)
+    const rows = []
+    let curRow = [], curW = 0
+    chipNodes.forEach(chip => {
+      if (curW + chip.chipW > maxRowW && curRow.length > 0) {
+        rows.push(curRow)
+        curRow = []; curW = 0
+      }
+      curRow.push(chip)
+      curW += chip.chipW + PCB.chipGap
+    })
+    if (curRow.length) rows.push(curRow)
+
+    // Assign x,y within board
+    let boardW = 0, boardH = 0
+    rows.forEach((row, ri) => {
+      const rowW = row.reduce((s, c) => s + c.chipW + PCB.chipGap, -PCB.chipGap)
+      let x = PCB.boardPad
+      row.forEach(chip => {
+        chip.lx = x
+        chip.ly = PCB.boardPad + ri * (PCB.chipH + PCB.chipGap + 10)
+        x += chip.chipW + PCB.chipGap
+      })
+      boardW = Math.max(boardW, rowW + PCB.boardPad * 2)
+      boardH = PCB.boardPad + (ri + 1) * (PCB.chipH + PCB.chipGap + 10) + PCB.boardPad - 10
+    })
+
+    boardW = Math.max(boardW, 300)
+    boardH = Math.max(boardH, 100)
+
+    return {
+      mod, color, layerIdx,
+      chips: chipNodes,
+      boardW, boardH,
+      designator: 'U' + (layerIdx + 1),
+    }
+  })
+
+  return layers
+}
+
+// ── PCB Renderer ─────────────────────────────────
+
+function renderPCB() {
+  if (!mapData || !mapData.modules || mapData.modules.length === 0) return
+
   const container = document.getElementById('mapContainer')
   const W = container.clientWidth, H = container.clientHeight
   const svg = d3.select('#mapSvg').attr('width', W).attr('height', H)
   svg.selectAll('*').remove()
 
+  const showLabels = document.getElementById('pcbLabels')?.checked !== false
+  const showVias = document.getElementById('pcbVias')?.checked !== false
+
+  // ── SVG Defs ─────────────────────────────────
+  const defs = svg.append('defs')
+
+  // Grid dot pattern
+  const gridPat = defs.append('pattern')
+    .attr('id', 'pcb-grid').attr('width', PCB.gridStep).attr('height', PCB.gridStep)
+    .attr('patternUnits', 'userSpaceOnUse')
+  gridPat.append('circle')
+    .attr('cx', PCB.gridStep/2).attr('cy', PCB.gridStep/2).attr('r', 0.5)
+    .attr('fill', PCB.gridDot)
+
+  // Copper glow filter
+  const glow = defs.append('filter').attr('id', 'copper-glow')
+    .attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%')
+  glow.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '3').attr('result', 'blur')
+  glow.append('feMerge').selectAll('feMergeNode').data(['blur', 'SourceGraphic']).join('feMergeNode')
+    .attr('in', d => d)
+
+  // Active signal glow
+  const sigGlow = defs.append('filter').attr('id', 'signal-glow')
+    .attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%')
+  sigGlow.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '5').attr('result', 'blur')
+  sigGlow.append('feMerge').selectAll('feMergeNode').data(['blur', 'SourceGraphic']).join('feMergeNode')
+    .attr('in', d => d)
+
+  // Board shadow
+  const boardShadow = defs.append('filter').attr('id', 'board-shadow')
+    .attr('x', '-10%').attr('y', '-10%').attr('width', '130%').attr('height', '130%')
+  boardShadow.append('feDropShadow')
+    .attr('dx', 0).attr('dy', 8).attr('stdDeviation', 12)
+    .attr('flood-color', 'rgba(0,0,0,0.5)')
+
   const g = svg.append('g')
-  const zoom = d3.zoom().scaleExtent([0.08, 3]).on('zoom', (e) => g.attr('transform', e.transform))
+  const zoom = d3.zoom().scaleExtent([0.05, 4]).on('zoom', (e) => g.attr('transform', e.transform))
   svg.call(zoom)
 
-  // Card dimensions based on content
-  const CARD_W = 220, ROW_H = 16
-  const nodes = mapData.modules
-    .map((m, i) => {
-      const subs = mapData.subModules.filter(s => s.parentId === m.id)
-      const rows = Math.min(subs.length, 14)
-      const cardH = 34 + rows * ROW_H + (subs.length > 14 ? 18 : 8) + (subs.length === 0 ? 24 : 0)
-      return { ...m, idx: i, subs, cardW: CARD_W, cardH, color: mColor(i) }
-    })
-    .sort((a, b) => b.fnCount - a.fnCount)
+  // ── Layout ───────────────────────────────────
+  const layers = layoutPCBLayers(mapData.modules, mapData.subModules, mapData.subEdges || [])
 
-  // Masonry grid layout — no physics, no jiggle
-  const GAP_X = 60, GAP_Y = 40
-  const cols = Math.max(1, Math.floor(2400 / (CARD_W + GAP_X)))
-  const colHeights = new Array(cols).fill(0)
-  nodes.forEach(n => {
-    let minCol = 0
-    for (let c = 1; c < cols; c++) { if (colHeights[c] < colHeights[minCol]) minCol = c }
-    n.x = minCol * (CARD_W + GAP_X)
-    n.y = colHeights[minCol]
-    colHeights[minCol] += n.cardH + GAP_Y
+  // Position layers in exploded stack (centered horizontally)
+  const totalMaxW = Math.max(...layers.map(l => l.boardW))
+  let currentY = 40
+  layers.forEach((layer, i) => {
+    // Reverse: bottom layer (index 0, most connected) at the bottom of the visual
+    const vi = layers.length - 1 - i
+    layer.gx = (totalMaxW - layer.boardW) / 2
+    layer.gy = vi * (layer.boardH + PCB.layerGap)
+    // Absolute positions for chips
+    layer.chips.forEach(chip => {
+      chip.ax = layer.gx + chip.lx
+      chip.ay = layer.gy + chip.ly
+    })
   })
 
-  // Lookup for edges
+  // Build chip lookup
+  const chipLookup = {}
+  layers.forEach(layer => {
+    layer.chips.forEach(chip => { chipLookup[chip.id] = { ...chip, layer } })
+  })
+
+  // ── Draw inter-layer traces (behind boards) ──
+  const crossEdges = (mapData.subEdges || []).filter(e => {
+    const s = chipLookup[e.source], t = chipLookup[e.target]
+    return s && t && s.layer.layerIdx !== t.layer.layerIdx
+  })
+
+  const interTraceGroup = g.append('g').attr('class', 'inter-traces')
+
+  crossEdges.forEach(e => {
+    const s = chipLookup[e.source], t = chipLookup[e.target]
+    const sx = s.ax + s.chipW / 2, sy = s.ay + s.chipH / 2
+    const tx = t.ax + t.chipW / 2, ty = t.ay + t.chipH / 2
+
+    // Straight line between layers
+    interTraceGroup.append('line')
+      .attr('x1', sx).attr('y1', sy).attr('x2', tx).attr('y2', ty)
+      .attr('stroke', PCB.copperDim)
+      .attr('stroke-width', Math.max(0.5, Math.min(2, (e.weight || 1) / 5)))
+      .attr('data-source', e.source).attr('data-target', e.target)
+
+    // Via dots at endpoints
+    if (showVias) {
+      ;[{x: sx, y: sy}, {x: tx, y: ty}].forEach(p => {
+        interTraceGroup.append('circle')
+          .attr('cx', p.x).attr('cy', p.y).attr('r', PCB.viaR)
+          .attr('fill', PCB.via).attr('stroke', PCB.viaRing).attr('stroke-width', 0.8)
+        interTraceGroup.append('circle')
+          .attr('cx', p.x).attr('cy', p.y).attr('r', PCB.viaDrillR)
+          .attr('fill', PCB.viaDrill)
+      })
+    }
+  })
+
+  // ── Draw Boards ──────────────────────────────
+  layers.forEach(layer => {
+    const lg = g.append('g')
+      .attr('class', 'pcb-layer')
+      .attr('data-module', layer.mod.id)
+      .attr('transform', `translate(${layer.gx},${layer.gy})`)
+
+    // Board shadow
+    lg.append('rect')
+      .attr('x', -4).attr('y', -4)
+      .attr('width', layer.boardW + 8).attr('height', layer.boardH + 8)
+      .attr('rx', PCB.boardRadius + 2).attr('ry', PCB.boardRadius + 2)
+      .attr('fill', 'none')
+      .attr('filter', 'url(#board-shadow)')
+
+    // Board 3D side (bottom edge thickness)
+    lg.append('rect')
+      .attr('x', 2).attr('y', layer.boardH)
+      .attr('width', layer.boardW - 2).attr('height', PCB.boardThick)
+      .attr('rx', 1).attr('fill', PCB.boardEdgeSide)
+
+    // Board 3D side (right edge thickness)
+    lg.append('rect')
+      .attr('x', layer.boardW).attr('y', 2)
+      .attr('width', PCB.boardThick).attr('height', layer.boardH - 2)
+      .attr('ry', 1).attr('fill', PCB.boardEdgeSide)
+
+    // Board main surface
+    lg.append('rect')
+      .attr('width', layer.boardW).attr('height', layer.boardH)
+      .attr('rx', PCB.boardRadius).attr('ry', PCB.boardRadius)
+      .attr('fill', PCB.boardSurface)
+      .attr('stroke', PCB.boardEdge).attr('stroke-width', 1.5)
+
+    // Grid dot overlay
+    lg.append('rect')
+      .attr('width', layer.boardW).attr('height', layer.boardH)
+      .attr('rx', PCB.boardRadius).attr('fill', 'url(#pcb-grid)')
+
+    // Board edge cut (inner border)
+    lg.append('rect')
+      .attr('x', 6).attr('y', 6)
+      .attr('width', layer.boardW - 12).attr('height', layer.boardH - 12)
+      .attr('rx', PCB.boardRadius - 2).attr('fill', 'none')
+      .attr('stroke', PCB.copperDim).attr('stroke-width', 0.5).attr('stroke-dasharray', '4,3')
+
+    // Corner fiducials
+    const fidR = 3
+    ;[[14, 14], [layer.boardW - 14, 14], [14, layer.boardH - 14], [layer.boardW - 14, layer.boardH - 14]].forEach(([fx, fy]) => {
+      lg.append('circle').attr('cx', fx).attr('cy', fy).attr('r', fidR)
+        .attr('fill', 'none').attr('stroke', PCB.copperDim).attr('stroke-width', 0.5)
+      lg.append('circle').attr('cx', fx).attr('cy', fy).attr('r', 1)
+        .attr('fill', PCB.copperDim)
+    })
+
+    // ── Silkscreen: module name + designator ──
+    lg.append('text')
+      .attr('x', 20).attr('y', layer.boardH - 14)
+      .attr('font-family', 'JetBrains Mono, monospace').attr('font-size', '8px')
+      .attr('fill', PCB.silkDim).attr('font-weight', '700')
+      .text(layer.designator)
+
+    if (showLabels) {
+      lg.append('text')
+        .attr('x', 36).attr('y', layer.boardH - 14)
+        .attr('font-family', 'JetBrains Mono, monospace').attr('font-size', '7px')
+        .attr('fill', PCB.silkDim)
+        .text(layer.mod.name)
+    }
+
+    // Module color accent strip (top edge)
+    lg.append('rect')
+      .attr('x', 0).attr('y', 0)
+      .attr('width', layer.boardW).attr('height', 3)
+      .attr('rx', PCB.boardRadius).attr('fill', layer.color).attr('opacity', 0.6)
+
+    // ── Intra-layer traces (between chips on same board) ──
+    const intraEdges = (mapData.subEdges || []).filter(e => {
+      const s = layer.chips.find(c => c.id === e.source)
+      const t = layer.chips.find(c => c.id === e.target)
+      return s && t
+    })
+
+    intraEdges.forEach(e => {
+      const s = layer.chips.find(c => c.id === e.source)
+      const t = layer.chips.find(c => c.id === e.target)
+      const sx = s.lx + s.chipW, sy = s.ly + s.chipH / 2
+      const tx = t.lx,           ty = t.ly + t.chipH / 2
+
+      // Orthogonal copper trace with 45° chamfer
+      let path
+      if (Math.abs(sx - tx) < 5) {
+        path = `M${sx},${sy} L${tx},${ty}`
+      } else {
+        const mx = (sx + tx) / 2
+        const chamfer = Math.min(8, Math.abs(ty - sy) / 2, Math.abs(mx - sx))
+        if (Math.abs(ty - sy) < 2) {
+          path = `M${sx},${sy} H${tx}`
+        } else {
+          const dir = ty > sy ? 1 : -1
+          path = `M${sx},${sy} H${mx - chamfer} L${mx},${sy + dir * chamfer} V${ty - dir * chamfer} L${mx + chamfer},${ty} H${tx}`
+        }
+      }
+
+      lg.append('path')
+        .attr('d', path)
+        .attr('fill', 'none').attr('stroke', PCB.copperTrace)
+        .attr('stroke-width', Math.max(0.8, Math.min(2, (e.weight || 1) / 3)))
+        .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round')
+        .attr('data-source', e.source).attr('data-target', e.target)
+
+      // Solder pads at junctions
+      ;[{x: sx, y: sy}, {x: tx, y: ty}].forEach(p => {
+        lg.append('rect')
+          .attr('x', p.x - PCB.chipPadSize/2).attr('y', p.y - PCB.chipPadSize/2 + 0.5)
+          .attr('width', PCB.chipPadSize).attr('height', PCB.chipPadSize - 1)
+          .attr('rx', 1).attr('fill', PCB.gold).attr('opacity', 0.5)
+      })
+    })
+
+    // ── Chips (IC packages) ──────────────────────
+    layer.chips.forEach((chip, ci) => {
+      const cg = lg.append('g')
+        .attr('class', 'pcb-chip')
+        .attr('transform', `translate(${chip.lx},${chip.ly})`)
+        .attr('data-submodule', chip.id)
+        .style('cursor', 'pointer')
+
+      // Chip body
+      cg.append('rect')
+        .attr('width', chip.chipW).attr('height', chip.chipH)
+        .attr('rx', PCB.chipRadius).attr('ry', PCB.chipRadius)
+        .attr('fill', PCB.chipBody)
+        .attr('stroke', PCB.chipBorder).attr('stroke-width', 1)
+
+      // Pin 1 marker (circle in top-left)
+      cg.append('circle')
+        .attr('cx', 8).attr('cy', 8).attr('r', 2)
+        .attr('fill', 'none').attr('stroke', PCB.silkDim).attr('stroke-width', 0.5)
+
+      // Colored top band
+      cg.append('rect')
+        .attr('width', chip.chipW).attr('height', 4)
+        .attr('rx', PCB.chipRadius)
+        .attr('fill', chip.color).attr('opacity', 0.4)
+
+      // Pads along top and bottom edges
+      const padCount = Math.max(2, Math.min(8, Math.floor(chip.chipW / 14)))
+      const padSpacing = chip.chipW / (padCount + 1)
+      for (let p = 1; p <= padCount; p++) {
+        const px = p * padSpacing - 2
+        // Top pads
+        cg.append('rect')
+          .attr('x', px).attr('y', -2)
+          .attr('width', 4).attr('height', 4)
+          .attr('rx', 0.5).attr('fill', PCB.gold).attr('opacity', 0.35)
+        // Bottom pads
+        cg.append('rect')
+          .attr('x', px).attr('y', chip.chipH - 2)
+          .attr('width', 4).attr('height', 4)
+          .attr('rx', 0.5).attr('fill', PCB.gold).attr('opacity', 0.35)
+      }
+
+      // Chip designator
+      cg.append('text')
+        .attr('x', chip.chipW / 2).attr('y', 14)
+        .attr('text-anchor', 'middle')
+        .attr('font-family', 'JetBrains Mono, monospace').attr('font-size', '8px')
+        .attr('font-weight', '600').attr('fill', chip.color).attr('opacity', 0.9)
+        .text(chip.name.length > 20 ? chip.name.slice(0, 19) + '…' : chip.name)
+
+      // Function count + designator
+      if (showLabels) {
+        cg.append('text')
+          .attr('x', chip.chipW / 2).attr('y', 26)
+          .attr('text-anchor', 'middle')
+          .attr('font-family', 'JetBrains Mono, monospace').attr('font-size', '7px')
+          .attr('fill', PCB.silkDim)
+          .text(`${chip.fnCount || 0} fn`)
+      }
+
+      // ── Hover interaction ──────────────────
+      cg.on('mouseover', function() {
+        d3.select(this).select('rect').attr('stroke', chip.color).attr('stroke-width', 1.5)
+        // Highlight connected traces
+        g.selectAll('path[data-source="' + chip.id + '"], path[data-target="' + chip.id + '"]')
+          .attr('stroke', PCB.copperBright).attr('stroke-width', 2.5)
+          .attr('filter', 'url(#copper-glow)')
+        g.selectAll('line[data-source="' + chip.id + '"], line[data-target="' + chip.id + '"]')
+          .attr('stroke', PCB.copperBright).attr('stroke-width', 2)
+          .attr('filter', 'url(#copper-glow)')
+        // Dim other chips
+        g.selectAll('.pcb-chip').each(function() {
+          const sid = d3.select(this).attr('data-submodule')
+          if (sid !== chip.id) d3.select(this).attr('opacity', 0.3)
+        })
+      }).on('mouseout', function() {
+        d3.select(this).select('rect').attr('stroke', PCB.chipBorder).attr('stroke-width', 1)
+        g.selectAll('path[data-source], path[data-target]')
+          .attr('stroke', PCB.copperTrace).attr('filter', null)
+          .each(function() {
+            const w = parseFloat(d3.select(this).attr('data-orig-w') || '1')
+          })
+        g.selectAll('line[data-source], line[data-target]')
+          .attr('stroke', PCB.copperDim).attr('filter', null)
+          .each(function() {
+            d3.select(this).attr('stroke-width',
+              Math.max(0.5, Math.min(2, parseFloat(d3.select(this).attr('data-w') || '1'))))
+          })
+        g.selectAll('.pcb-chip').attr('opacity', 1)
+      })
+    })
+
+    // ── Board hover (highlight entire module) ──
+    lg.on('mouseover', function(e) {
+      if (e.target.closest('.pcb-chip')) return // let chip handle it
+      lg.select('rect').attr('stroke', layer.color).attr('stroke-width', 2)
+    }).on('mouseout', function(e) {
+      if (e.target.closest('.pcb-chip')) return
+      lg.select('rect').attr('stroke', PCB.boardEdge).attr('stroke-width', 1.5)
+    })
+  })
+
+  // ── Fit to view ──────────────────────────────
+  requestAnimationFrame(() => {
+    const bounds = g.node().getBBox()
+    const pad = 60
+    const scale = Math.min(W / (bounds.width + pad * 2), H / (bounds.height + pad * 2), 0.9)
+    const tx = W / 2 - (bounds.x + bounds.width / 2) * scale
+    const ty = H / 2 - (bounds.y + bounds.height / 2) * scale
+    svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
+  })
+}
+
+// ── Scenario Highlight ─────────────────────────
+
+async function highlightScenario() {
+  const scenId = document.getElementById('pcbScenarioSelect').value
+  if (!scenId) {
+    renderPCB()
+    return
+  }
+
+  try {
+    const res = await fetch('/api/scenarios/' + encodeURIComponent(scenId) + '/flow')
+    const flow = await res.json()
+    if (!flow.nodes || !flow.edges) { renderPCB(); return }
+
+    // Re-render base
+    renderPCB()
+
+    const g = d3.select('#mapSvg g')
+    const activeNodeIds = new Set(flow.nodes.map(n => n.id))
+    const activeEdges = flow.edges
+
+    // Dim everything not in scenario
+    g.selectAll('.pcb-chip').each(function() {
+      const sid = d3.select(this).attr('data-submodule')
+      if (!activeNodeIds.has(sid)) {
+        d3.select(this).attr('opacity', 0.12)
+      }
+    })
+
+    // Highlight active traces
+    activeEdges.forEach(e => {
+      g.selectAll(`path[data-source="${e.source}"][data-target="${e.target}"],
+                   path[data-source="${e.target}"][data-target="${e.source}"]`)
+        .attr('stroke', PCB.active).attr('stroke-width', 2.5)
+        .attr('filter', 'url(#signal-glow)')
+        .style('animation', 'copperPulse 1s linear infinite')
+        .attr('stroke-dasharray', '8,4')
+
+      g.selectAll(`line[data-source="${e.source}"][data-target="${e.target}"],
+                   line[data-source="${e.target}"][data-target="${e.source}"]`)
+        .attr('stroke', PCB.active).attr('stroke-width', 2.5)
+        .attr('filter', 'url(#signal-glow)')
+    })
+
+    // Highlight active chips
+    activeNodeIds.forEach(nid => {
+      g.selectAll(`.pcb-chip[data-submodule="${nid}"]`).each(function() {
+        d3.select(this).attr('opacity', 1)
+        d3.select(this).select('rect')
+          .attr('stroke', PCB.active).attr('stroke-width', 1.5)
+      })
+    })
+  } catch (err) {
+    console.error('Scenario highlight failed:', err)
+  }
+}
+
+// ══════════════════════════════════════════════════
+// Scenario Flow Visualization
+// ══════════════════════════════════════════════════
+
+let flowInitialized = false
+let flowData = null
+let concernTimeout = null
+
+// ── Init Flow ──────────────────────────────────
+
+async function initFlow() {
+  if (flowInitialized) return
+  flowInitialized = true
+  await loadScenarioList()
+}
+
+async function loadScenarioList() {
+  try {
+    const res = await fetch('/api/scenarios')
+    const data = await res.json()
+    const sel = document.getElementById('scenarioSelect')
+    // Keep first option, clear rest
+    while (sel.options.length > 1) sel.remove(1)
+    ;(data.scenarios || []).forEach(s => {
+      const opt = document.createElement('option')
+      opt.value = s.id
+      opt.textContent = `${s.name} (${s.stepCount} steps)`
+      sel.appendChild(opt)
+    })
+  } catch (e) { console.error('Failed to load scenarios:', e) }
+}
+
+// ── Load + Render Flow ─────────────────────────
+
+async function loadScenarioFlow() {
+  const id = document.getElementById('scenarioSelect').value
+  const empty = document.getElementById('flowEmpty')
+  const svg = document.getElementById('flowSvg')
+
+  if (!id) {
+    empty.style.display = 'flex'
+    d3.select('#flowSvg').selectAll('*').remove()
+    flowData = null
+    return
+  }
+
+  empty.style.display = 'none'
+
+  try {
+    const res = await fetch('/api/scenarios/' + encodeURIComponent(id) + '/flow')
+    flowData = await res.json()
+    if (flowData.error) throw new Error(flowData.error)
+    renderFlow()
+  } catch (e) {
+    empty.style.display = 'flex'
+    empty.innerHTML = '<h3 style="color:var(--red)">' + esc(e.message) + '</h3>'
+  }
+}
+
+function renderFlow() {
+  if (!flowData || !flowData.nodes || flowData.nodes.length === 0) return
+
+  const container = document.getElementById('flowContainer')
+  const W = container.clientWidth, H = container.clientHeight
+  const svg = d3.select('#flowSvg').attr('width', W).attr('height', H)
+  svg.selectAll('*').remove()
+
+  // Arrow marker
+  svg.append('defs').append('marker')
+    .attr('id', 'flow-arrow')
+    .attr('viewBox', '0 0 10 6').attr('refX', 10).attr('refY', 3)
+    .attr('markerWidth', 8).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,0 L10,3 L0,6 Z')
+    .attr('fill', 'rgba(255,255,255,0.25)')
+
+  const g = svg.append('g')
+  const zoom = d3.zoom().scaleExtent([0.1, 3]).on('zoom', (e) => g.attr('transform', e.transform))
+  svg.call(zoom)
+
+  const nodes = flowData.nodes
+  const edges = flowData.edges
+  const modules = flowData.modules
+
+  // Color lookup
+  const colorMap = {}
+  modules.forEach(m => { colorMap[m.id] = m.color })
+
+  // ── DAG Layout ───────────────────────────────
+  // Group nodes by order → columns
+  const layers = new Map()
+  nodes.forEach(n => {
+    const order = n.order || 1
+    if (!layers.has(order)) layers.set(order, [])
+    layers.get(order).push(n)
+  })
+
+  // Sort within each layer by parent module (cluster siblings)
+  layers.forEach(layer => layer.sort((a, b) => {
+    const cmp = a.parentModuleId.localeCompare(b.parentModuleId)
+    return cmp !== 0 ? cmp : a.name.localeCompare(b.name)
+  }))
+
+  const COL_W = 200, COL_GAP = 80, ROW_H = 70, NODE_W = 170, NODE_H = 50, PAD = 60
+  const sortedOrders = [...layers.keys()].sort((a, b) => a - b)
+
+  // Assign positions
+  sortedOrders.forEach((order, colIdx) => {
+    const layer = layers.get(order)
+    const layerH = layer.length * ROW_H
+    const startY = PAD
+    layer.forEach((node, rowIdx) => {
+      node.x = PAD + colIdx * (COL_W + COL_GAP)
+      node.y = startY + rowIdx * ROW_H
+    })
+  })
+
+  // ── Module Regions ───────────────────────────
+  // Group nodes by parentModuleId, compute bounding boxes
+  const moduleGroups = new Map()
+  nodes.forEach(n => {
+    if (!moduleGroups.has(n.parentModuleId)) moduleGroups.set(n.parentModuleId, [])
+    moduleGroups.get(n.parentModuleId).push(n)
+  })
+
+  const regionPad = 14
+  const regionGroup = g.append('g').attr('class', 'regions')
+  moduleGroups.forEach((mnodes, modId) => {
+    const minX = Math.min(...mnodes.map(n => n.x)) - regionPad
+    const minY = Math.min(...mnodes.map(n => n.y)) - regionPad
+    const maxX = Math.max(...mnodes.map(n => n.x + NODE_W)) + regionPad
+    const maxY = Math.max(...mnodes.map(n => n.y + NODE_H)) + regionPad
+    const color = colorMap[modId] || '#4d8eff'
+    const mod = modules.find(m => m.id === modId)
+
+    regionGroup.append('rect')
+      .attr('class', 'flow-module-region')
+      .attr('x', minX).attr('y', minY)
+      .attr('width', maxX - minX).attr('height', maxY - minY)
+      .attr('fill', color + '08').attr('stroke', color + '25')
+
+    regionGroup.append('text')
+      .attr('x', minX + 6).attr('y', minY - 4)
+      .attr('font-family', 'var(--sans)').attr('font-size', '9px')
+      .attr('font-weight', '600').attr('fill', color + '80')
+      .text(mod ? mod.name : modId)
+  })
+
+  // ── Edges ────────────────────────────────────
   const nodeLookup = {}
   nodes.forEach(n => { nodeLookup[n.id] = n })
 
-  // Edges
-  const edges = mapData.edges
-    .filter(e => nodeLookup[e.source] && nodeLookup[e.target])
-    .sort((a, b) => b.weight - a.weight)
-    .slice(0, 60)
-  const maxWeight = Math.max(...edges.map(e => e.weight), 1)
+  const edgeGroup = g.append('g').attr('class', 'edges')
+  const maxWeight = Math.max(...edges.map(e => e.weight || 1), 1)
 
-  // Orthogonal connection paths (right edge → midpoint → left edge)
-  function orthoPath(sn, tn) {
-    const sx = sn.x + sn.cardW, sy = sn.y + sn.cardH / 2
-    const tx = tn.x,            ty = tn.y + tn.cardH / 2
-    // If target is to the left, swap direction
-    if (tx < sx) {
-      const ax = sn.x, ay = sy, bx = tn.x + tn.cardW, by = ty
-      const mx = Math.min(ax, bx) - 30
-      return `M${ax},${ay} H${mx} V${by} H${bx}`
+  edges.forEach(e => {
+    const sn = nodeLookup[e.source], tn = nodeLookup[e.target]
+    if (!sn || !tn) return
+
+    const sx = sn.x + NODE_W, sy = sn.y + NODE_H / 2
+    const tx = tn.x, ty = tn.y + NODE_H / 2
+
+    // Orthogonal path
+    let pathD
+    if (tx > sx) {
+      const mx = (sx + tx) / 2
+      pathD = `M${sx},${sy} H${mx} V${ty} H${tx}`
+    } else {
+      // Backward: go below/above
+      const offset = (sy < ty) ? 30 : -30
+      pathD = `M${sx},${sy} H${sx + 20} V${sy + offset} H${tx - 20} V${ty} H${tx}`
     }
-    const mx = (sx + tx) / 2
-    return `M${sx},${sy} H${mx} V${ty} H${tx}`
-  }
 
-  const edgeGroup = g.append('g')
-  const edgePaths = edgeGroup.selectAll('path').data(edges).join('path')
-    .attr('fill', 'none')
-    .attr('stroke', 'rgba(255,255,255,0.07)')
-    .attr('stroke-width', 1)
-    .attr('stroke-dasharray', '6,4')
-    .attr('d', e => orthoPath(nodeLookup[e.source], nodeLookup[e.target]))
+    const w = Math.max(1, (e.weight || 1) / maxWeight * 2.5)
+    const sourceColor = colorMap[sn.parentModuleId] || '#4d8eff'
 
-  // Card groups — positioned at top-left corner
-  const cardGroups = g.selectAll('g.card').data(nodes).join('g')
-    .attr('class', 'card')
-    .attr('transform', d => `translate(${d.x},${d.y})`)
+    edgeGroup.append('path')
+      .attr('class', 'flow-edge')
+      .attr('d', pathD)
+      .attr('stroke', sourceColor + '60')
+      .attr('stroke-width', w)
+      .attr('marker-end', 'url(#flow-arrow)')
 
-  // HTML cards via foreignObject
-  cardGroups.each(function(d) {
-    const fo = d3.select(this).append('foreignObject')
-      .attr('width', d.cardW).attr('height', d.cardH)
-
-    const card = fo.append('xhtml:div').attr('class', 'mod-card')
-      .style('width', d.cardW + 'px').style('height', d.cardH + 'px')
-
-    const head = card.append('xhtml:div').attr('class', 'mod-card-head')
-      .style('border-left', `3px solid ${d.color}`)
-    head.append('xhtml:span').attr('class', 'mc-title').style('color', d.color).text(d.name)
-    head.append('xhtml:span').attr('class', 'mc-count').text(d.fnCount)
-
-    const body = card.append('xhtml:div').attr('class', 'mod-card-body')
-    d.subs.slice(0, 14).forEach(sub => {
-      const row = body.append('xhtml:div').attr('class', 'mod-card-row')
-      row.append('xhtml:span').attr('class', 'mcr-name').text(sub.name)
-      if (sub.fnCount) row.append('xhtml:span').attr('class', 'mcr-fns').text(sub.fnCount)
-    })
-    if (d.subs.length > 14) {
-      body.append('xhtml:div').attr('class', 'mod-card-row')
-        .style('color', 'rgba(255,255,255,0.2)').text(`+${d.subs.length - 14} more`)
-    }
-    if (d.subs.length === 0) {
-      body.append('xhtml:div').attr('class', 'mod-card-row')
-        .style('color', 'rgba(255,255,255,0.15)').style('padding', '4px 10px')
-        .text('no sub-modules yet')
+    // Edge label at midpoint
+    if (e.label) {
+      const lx = (sx + tx) / 2, ly = Math.min(sy, ty) - 6
+      edgeGroup.append('text')
+        .attr('class', 'flow-edge-label')
+        .attr('x', lx).attr('y', ly)
+        .attr('text-anchor', 'middle')
+        .text(e.label.length > 25 ? e.label.slice(0, 25) + '...' : e.label)
     }
   })
 
-  // Drag — move card, redraw connected edges, no simulation
-  cardGroups.call(d3.drag().on('drag', function(e, d) {
-    d.x += e.dx; d.y += e.dy
-    d3.select(this).attr('transform', `translate(${d.x},${d.y})`)
-    edgePaths.attr('d', edge => orthoPath(nodeLookup[edge.source], nodeLookup[edge.target]))
-  }))
+  // ── Node Cards ───────────────────────────────
+  const nodeGroup = g.append('g').attr('class', 'nodes')
+
+  nodes.forEach(n => {
+    const color = colorMap[n.parentModuleId] || '#4d8eff'
+
+    const fo = nodeGroup.append('foreignObject')
+      .attr('x', n.x).attr('y', n.y)
+      .attr('width', NODE_W).attr('height', NODE_H)
+
+    const card = fo.append('xhtml:div')
+      .attr('class', 'flow-node')
+      .attr('data-id', n.id)
+      .style('border-left', `3px solid ${color}`)
+
+    card.append('xhtml:div')
+      .attr('class', 'flow-node-name')
+      .style('color', color)
+      .text(n.name)
+
+    const meta = card.append('xhtml:div').attr('class', 'flow-node-meta')
+    meta.append('xhtml:span')
+      .attr('class', 'flow-role-badge ' + (n.role || 'processing'))
+      .text(n.role || 'processing')
+    meta.append('xhtml:span').text(n.fnCount + ' fns')
+
+    // Hover: show description tooltip
+    if (n.description) {
+      card.attr('title', n.description)
+    }
+  })
 
   // Hover: highlight connected edges
-  cardGroups.on('mouseover', function(e, d) {
-    d3.select(this).select('.mod-card').style('border-color', d.color).style('box-shadow', `0 0 20px ${d.color}22`)
-    edgePaths.each(function(edge) {
-      const connected = edge.source === d.id || edge.target === d.id
+  nodeGroup.selectAll('foreignObject').on('mouseover', function(e) {
+    const nodeId = d3.select(this).select('.flow-node').attr('data-id')
+    edgeGroup.selectAll('.flow-edge').each(function(_, i) {
+      const edge = edges[i]
+      if (!edge) return
+      const connected = edge.source === nodeId || edge.target === nodeId
       d3.select(this)
-        .attr('stroke', connected ? d.color : 'rgba(255,255,255,0.03)')
-        .attr('stroke-width', connected ? Math.max(1.5, edge.weight / maxWeight * 3) : 0.5)
-        .attr('stroke-dasharray', connected ? 'none' : '6,4')
+        .attr('stroke-width', connected ? 3 : 0.5)
+        .style('opacity', connected ? 1 : 0.2)
     })
   }).on('mouseout', function() {
-    d3.select(this).select('.mod-card').style('border-color', '').style('box-shadow', '')
-    edgePaths
-      .attr('stroke', 'rgba(255,255,255,0.07)').attr('stroke-width', 1).attr('stroke-dasharray', '6,4')
+    edgeGroup.selectAll('.flow-edge').each(function(_, i) {
+      const edge = edges[i]
+      if (!edge) return
+      const w = Math.max(1, (edge.weight || 1) / maxWeight * 2.5)
+      d3.select(this).attr('stroke-width', w).style('opacity', 1)
+    })
   })
 
   // Fit to view
   requestAnimationFrame(() => {
     const bounds = g.node().getBBox()
-    const pad = 50
+    const pad = 40
     const scale = Math.min(W / (bounds.width + pad * 2), H / (bounds.height + pad * 2), 1)
     const tx = W / 2 - (bounds.x + bounds.width / 2) * scale
-    const ty = W > bounds.width + pad * 2 ? pad : H / 2 - (bounds.y + bounds.height / 2) * scale
+    const ty = H / 2 - (bounds.y + bounds.height / 2) * scale
     svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale))
   })
+}
+
+// ── Concern Filter ─────────────────────────────
+
+function debounceConcern() {
+  if (concernTimeout) clearTimeout(concernTimeout)
+  concernTimeout = setTimeout(applyConcernFilter, 300)
+}
+
+async function applyConcernFilter() {
+  const term = document.getElementById('concernFilter').value.trim()
+
+  if (!term || !flowData) {
+    // Reset all nodes
+    document.querySelectorAll('.flow-node').forEach(el => {
+      el.classList.remove('dimmed', 'highlighted')
+    })
+    return
+  }
+
+  try {
+    const res = await fetch('/api/scenarios/concerns?term=' + encodeURIComponent(term))
+    const data = await res.json()
+    const matchedIds = new Set((data.matchedSubModules || []).map(s => s.id))
+
+    document.querySelectorAll('.flow-node').forEach(el => {
+      const id = el.getAttribute('data-id')
+      if (matchedIds.has(id)) {
+        el.classList.remove('dimmed')
+        el.classList.add('highlighted')
+      } else {
+        el.classList.add('dimmed')
+        el.classList.remove('highlighted')
+      }
+    })
+  } catch (e) {
+    console.error('Concern filter failed:', e)
+  }
+}
+
+// ── Scenario Discovery (SSE) ───────────────────
+
+async function computeEdges() {
+  document.getElementById('btnEdges').disabled = true
+  document.getElementById('btnEdges').textContent = 'Computing...'
+  switchTab('log')
+
+  try {
+    await fetch('/api/scenario-analysis/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edgesOnly: true }),
+    })
+    connectScenarioSSE()
+  } catch (err) {
+    appendLog('err', err.message)
+    document.getElementById('btnEdges').disabled = false
+    document.getElementById('btnEdges').textContent = 'Compute SubModule Edges'
+  }
+}
+
+async function discoverScenarios() {
+  document.getElementById('btnScenario').disabled = true
+  document.getElementById('btnStopScenario').style.display = ''
+  document.getElementById('logScroll').innerHTML = ''
+  logLines = 0; updateLogCount()
+  switchTab('log')
+
+  try {
+    await fetch('/api/scenario-analysis/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    connectScenarioSSE()
+  } catch (err) {
+    appendLog('err', err.message)
+    resetScenarioUI()
+  }
+}
+
+function stopScenario() {
+  fetch('/api/scenario-analysis/stop', { method: 'POST' })
+  appendLog('dim', 'Stopping scenario analysis...')
+}
+
+function connectScenarioSSE() {
+  const es = new EventSource('/api/scenario-analysis/stream')
+
+  es.addEventListener('log', (e) => {
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'progress') {
+        const isHeader = /^Phase [AB]|^Found |^Parsed |^Created /.test(msg.message)
+        appendLog(isHeader ? 'layer' : 'info', msg.message)
+      }
+      else if (msg.type === 'started') appendLog('layer', `Scenario analysis started: ${msg.repo}${msg.edgesOnly ? ' (edges only)' : ''}`)
+      else if (msg.type === 'done') appendLog('ok', `Done! ${msg.scenarios || 0} scenarios, ${msg.edges} edges, ${(msg.tokens || 0).toLocaleString()} tokens`)
+      else if (msg.type === 'error') appendLog('err', msg.error)
+      else if (msg.type === 'stopping') appendLog('dim', 'Stopping...')
+    } catch {}
+  })
+
+  es.addEventListener('status', async (e) => {
+    es.close()
+    resetScenarioUI()
+
+    // Show results
+    try {
+      const res = await fetch('/api/scenario-analysis/results')
+      const data = await res.json()
+      if (data.result) renderScenarioResults(data.result)
+    } catch {}
+
+    // Refresh scenario list
+    flowInitialized = false
+    await loadScenarioList()
+  })
+
+  es.onerror = () => {
+    es.close()
+    setTimeout(async () => {
+      try {
+        const res = await fetch('/api/scenario-analysis/results')
+        const data = await res.json()
+        if (data.status === 'running') connectScenarioSSE()
+        else { resetScenarioUI(); if (data.result) renderScenarioResults(data.result) }
+      } catch { resetScenarioUI() }
+    }, 2000)
+  }
+}
+
+function resetScenarioUI() {
+  document.getElementById('btnEdges').disabled = false
+  document.getElementById('btnEdges').textContent = 'Compute SubModule Edges'
+  document.getElementById('btnScenario').disabled = false
+  document.getElementById('btnStopScenario').style.display = 'none'
+}
+
+function renderScenarioResults(r) {
+  const box = document.getElementById('scenarioResultsBox')
+  box.classList.add('visible')
+  const rows = [
+    ['SUB_CALLS edges', r.subModuleEdges],
+    ['Scenarios', r.scenariosCreated],
+    ['Steps', r.totalSteps],
+    ['Flow edges', r.totalFlowEdges],
+    ['Tokens', (r.tokens || 0).toLocaleString()],
+    ['Duration', (r.durationMs / 1000).toFixed(1) + 's'],
+  ]
+  box.innerHTML = '<div class="section-title">Scenario Results</div>' + rows.map(([k, v]) =>
+    '<div class="results-row"><span>' + k + '</span><span class="r-val">' + v + '</span></div>'
+  ).join('')
 }
 </script>
 </body>

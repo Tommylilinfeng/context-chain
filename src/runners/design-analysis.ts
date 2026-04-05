@@ -11,7 +11,7 @@
 import { getSession, verifyConnectivity, closeDriver } from '../db/client'
 import { loadConfig } from '../config'
 import { createAIProvider } from '../ai'
-import { runDesignAnalysis, analyzeModuleStats, formatStatsReport, backfillOrphanFunctions } from '../ingestion/design-analysis'
+import { runDesignAnalysis, runReassignment, analyzeModuleStats, formatStatsReport, backfillOrphanFunctions } from '../ingestion/design-analysis'
 
 // ── CLI args ────────────────────────────────────────────
 
@@ -25,10 +25,11 @@ const maxLines = parseInt(getArg('--max-lines') ?? '0')
 const dryRun = hasFlag('--dry-run')
 const statsOnly = hasFlag('--stats')
 const backfillOnly = hasFlag('--backfill')
+const reassignOnly = hasFlag('--reassign')
 const limitModules = getArg('--limit') ? parseInt(getArg('--limit')!) : null
 
 if (!repoName) {
-  console.error('Usage: npm run design-analysis -- --repo <name> [--stats] [--concurrency <n>] [--max-lines <n>] [--limit <n>] [--dry-run]')
+  console.error('Usage: npm run design-analysis -- --repo <name> [--stats] [--reassign] [--concurrency <n>] [--max-lines <n>] [--limit <n>] [--dry-run]')
   process.exit(1)
 }
 
@@ -66,6 +67,31 @@ async function main(): Promise<void> {
       const result = await backfillOrphanFunctions(session, repoName!, dryRun, (msg) => console.log(msg))
       console.log(`\n✅ Done: +${result.fileLevelAdded} file-level, +${result.dirFunctionsAdded} in ${result.dirModulesCreated} dir-modules, ${result.stillOrphan} still orphan\n`)
     } finally {
+      await session.close()
+      await closeDriver()
+    }
+    return
+  }
+
+  // ── Reassign-only mode ──
+  if (reassignOnly) {
+    const ai = createAIProvider(config.ai as any)
+    await verifyConnectivity()
+    const session = await getSession()
+    try {
+      console.log(`\n🔄 Reassigning misassigned functions for ${repoName}${dryRun ? ' (dry run)' : ''}...\n`)
+      const result = await runReassignment({
+        dbSession: session, ai, repo: repoName!,
+        concurrency, dryRun,
+        onProgress: (msg) => console.log(`  ${msg}`),
+      })
+      console.log(`\n━━━ Reassignment Results ━━━`)
+      console.log(`  Reassigned to sub-modules: ${result.reassigned}`)
+      console.log(`  Infrastructure (removed): ${result.infrastructure}`)
+      console.log(`  Tokens: ${result.tokens.toLocaleString()}`)
+      console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s\n`)
+    } finally {
+      ai.cleanup()
       await session.close()
       await closeDriver()
     }

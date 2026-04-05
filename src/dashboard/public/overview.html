@@ -255,9 +255,11 @@ function render(d) {
   var codeChanged = h.codeChangedDecisions || 0
   var codeRemoved = h.codeRemovedDecisions || 0
   var embedPct = t.decisions > 0 ? Math.round((h.embeddedDecisions / t.decisions) * 100) : 0
-  var lastRun = h.lastPipelineRun || h.lastScheduledRun
-  var lastRunStr = lastRun ? new Date(lastRun.at || lastRun.startedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Never'
-  var lastRunStatus = lastRun ? (lastRun.status || 'done') : 'none'
+  var pipelines = h.pipelines || {}
+  function fmtPipeline(p) {
+    if (!p || !p.startedAt) return { str: 'Never', status: 'none' }
+    return { str: new Date(p.startedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}), status: p.status || 'idle' }
+  }
 
   var sc = h.lastStalenessCheck || {}
   var lastCheckStr = sc.checkedAt ? new Date(sc.checkedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Never'
@@ -267,7 +269,16 @@ function render(d) {
     + '<div class="health-card '+(anchoredPct > 70 ? 'ok' : anchoredPct > 40 ? 'warn' : 'bad')+'"><div class="health-icon">'+(anchoredPct > 70 ? '' : '')+'</div><div class="health-info"><div class="health-value" style="color:'+(anchoredPct > 70 ? 'var(--green)' : anchoredPct > 40 ? 'var(--yellow)' : 'var(--red)')+'">'+anchoredPct+'%</div><div class="health-label">Anchored ('+t.anchored+'/'+t.decisions+')</div></div></div>'
     + '<div class="health-card '+(embedPct > 80 ? 'ok' : embedPct > 30 ? 'warn' : 'bad')+'"><div class="health-icon"></div><div class="health-info"><div class="health-value" style="color:'+(embedPct > 80 ? 'var(--green)' : embedPct > 30 ? 'var(--yellow)' : 'var(--text-dim)')+'">'+embedPct+'%</div><div class="health-label">Embedded ('+(h.embeddedDecisions||0)+'/'+t.decisions+')</div></div></div>'
     + '<div class="health-card '+(h.gapFunctions > 10 ? 'warn' : 'ok')+'"><div class="health-icon"></div><div class="health-info"><div class="health-value" style="color:'+(h.gapFunctions > 10 ? 'var(--yellow)' : 'var(--text-dim)')+'">'+(h.gapFunctions||0)+'</div><div class="health-label">Gap Functions (no decisions)</div></div></div>'
-    + '<div class="health-card '+(lastRunStatus === 'done' ? 'ok' : lastRunStatus === 'error' ? 'bad' : 'warn')+'"><div class="health-icon">'+(lastRunStatus === 'done' ? '' : lastRunStatus === 'error' ? '' : '')+'</div><div class="health-info"><div class="health-value" style="font-size:14px;color:var(--text-secondary)">'+lastRunStr+'</div><div class="health-label">Last Pipeline Run</div></div></div>'
+  function pipelineCard(name, href, p) {
+    var f = fmtPipeline(p)
+    var cls = f.status === 'done' ? 'ok' : f.status === 'error' ? 'bad' : f.status === 'running' ? 'warn' : ''
+    var col = f.status === 'done' ? 'var(--green)' : f.status === 'error' ? 'var(--red)' : f.status === 'running' ? 'var(--accent)' : 'var(--text-dim)'
+    return '<a href="'+href+'" class="health-card '+cls+'" style="text-decoration:none;cursor:pointer"><div class="health-info"><div class="health-value" style="font-size:12px;color:'+col+'">'+f.str+'</div><div class="health-label">'+name+' <span style="font-size:9px;color:'+col+';text-transform:uppercase">'+f.status+'</span></div></div></a>'
+  }
+  healthCards += pipelineCard('Run', '/run', pipelines.run)
+    + pipelineCard('Group', '/group', pipelines.group)
+    + pipelineCard('Design', '/design', pipelines.design)
+    + pipelineCard('Localize', '/localize', pipelines.localize)
 
   // Welcome banner for first-time users (empty database)
   var welcomeBanner = ''

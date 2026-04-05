@@ -34,6 +34,8 @@ var ICONS = {
   localize:      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c-2 2-3 4-3 6.5s1 4.5 3 6.5M8 1.5c2 2 3 4 3 6.5s-1 4.5-3 6.5"/></svg>',
   design:        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2h5v5H2zM9 2h5v5H9zM5.5 9v5M10.5 9v5M3 11.5h10"/></svg>',
   packages:      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l6-2 6 2v8l-6 2-6-2V4z"/><path d="M8 6v8M2 4l6 2 6-2"/></svg>',
+  architecture:  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v3M4 7v7M8 7v7M12 7v7M2 14h12M5.5 4h5L12 7H4l1.5-3z"/></svg>',
+  graph:         '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="8" cy="12" r="2"/><path d="M5.7 5.3L9 10.5M10.3 5.3L9.3 10.2"/></svg>',
   search:        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>',
 }
 
@@ -43,11 +45,12 @@ var I18N = {
   en: {
     'brand.name': 'Context Chain',
     'brand.tagline': 'grep finds what code does.<br>We record why it was written that way.',
-    'nav.explore': 'Explore', 'nav.ingest': 'Ingest', 'nav.admin': 'Admin',
-    'nav.packages': 'Packages',
+    'nav.explore': 'Explore', 'nav.data': 'Data', 'nav.pipeline': 'Pipeline', 'nav.admin': 'Admin',
+    'nav.packages': 'Packages', 'nav.architecture': 'Architecture',
     'nav.overview': 'Overview', 'nav.decisions': 'Decisions', 'nav.relationships': 'Relationships', 'nav.concerns': 'Concerns',
     'nav.coverage': 'Coverage', 'nav.dependencies': 'Dependencies', 'nav.feedback': 'Feedback',
-    'nav.sessions': 'Sessions', 'nav.templates': 'Templates', 'nav.pipeline': 'Pipeline',
+    'nav.graph': 'Graph',
+    'nav.sessions': 'Sessions', 'nav.templates': 'Templates',
     'nav.run': 'Run', 'nav.group': 'Group', 'nav.design': 'Design', 'nav.localize': 'Localize', 'nav.history': 'History', 'nav.schedule': 'Schedule',
     'nav.query': 'Query', 'nav.system': 'System',
     'nav.onboarding': 'Getting Started',
@@ -72,15 +75,17 @@ var I18N = {
     'schedule.title': 'Schedule', 'schedule.subtitle': 'Automated pipeline scheduling',
     'query.title': 'Query', 'query.subtitle': 'Execute Cypher queries on the graph',
     'system.title': 'System', 'system.subtitle': 'Memgraph connection, config, and diagnostics',
+    'architecture.title': 'Architecture', 'architecture.subtitle': 'Interactive architecture documentation and exploration',
   },
   zh: {
     'brand.name': 'Context Chain',
     'brand.tagline': 'grep 找的是代码写了什么<br>我们记录的是代码为什么这样写',
-    'nav.explore': '浏览', 'nav.ingest': '摄入', 'nav.admin': '管理',
-    'nav.packages': '代码包',
+    'nav.explore': '浏览', 'nav.data': '数据', 'nav.pipeline': '管线', 'nav.admin': '管理',
+    'nav.packages': '代码包', 'nav.architecture': '架构文档',
     'nav.overview': '概览', 'nav.decisions': '决策', 'nav.relationships': '关系图', 'nav.concerns': '关注点',
     'nav.coverage': '覆盖率', 'nav.dependencies': '依赖', 'nav.feedback': '反馈',
-    'nav.sessions': 'Sessions', 'nav.templates': '模板', 'nav.pipeline': '管线',
+    'nav.graph': '图谱',
+    'nav.sessions': 'Sessions', 'nav.templates': '模板',
     'nav.run': '运行', 'nav.group': '分组', 'nav.design': '设计分析', 'nav.localize': '翻译', 'nav.history': '历史', 'nav.schedule': '定时',
     'nav.onboarding': '快速开始',
     'nav.query': '查询', 'nav.system': '系统',
@@ -105,6 +110,7 @@ var I18N = {
     'onboarding.title': '快速开始', 'onboarding.subtitle': '按步骤设置 Context Chain',
     'query.title': '查询', 'query.subtitle': '直接执行 Cypher 查询',
     'system.title': '系统', 'system.subtitle': 'Memgraph 连接、配置和诊断',
+    'architecture.title': '架构文档', 'architecture.subtitle': '交互式架构文档和代码探索',
   }
 }
 
@@ -119,6 +125,7 @@ var PAGE_KEY_MAP = {
   '/sessions': 'sessions', '/templates': 'templates', '/pipeline': 'pipeline',
   '/run': 'run', '/group': 'group', '/design': 'design', '/localize': 'localize', '/history': 'history', '/schedule': 'schedule',
   '/query': 'query', '/system': 'system', '/onboarding': 'onboarding',
+  '/architecture': 'architecture',
 }
 
 function translatePageHero() {
@@ -132,50 +139,144 @@ function translatePageHero() {
   if (sub) sub.textContent = t(pageKey + '.subtitle')
 }
 
+// ── NAV contract ─────────────────────────────────
+// Adding a new page:
+//   1. Create public/{name}.html
+//   2. Add entry below with href: '/{name}'
+//   3. Route is auto-registered by server (public/*.html → GET /{name})
+//   No manual route registration needed in server.ts.
+
+var CHEVRON_SVG = '<svg class="section-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>'
+
 var NAV = [
-  { titleKey: 'nav.explore', items: [
+  { id: 'explore', titleKey: 'nav.explore', defaultOpen: true, items: [
     { href: '/overview',       iconKey: 'overview',      key: 'nav.overview' },
     { href: '/decisions',      iconKey: 'decisions',     key: 'nav.decisions' },
-    { href: '/relationships',  iconKey: 'relationships', key: 'nav.relationships' },
-    { href: '/concerns',       iconKey: 'concerns',      key: 'nav.concerns' },
-    { href: '/coverage',       iconKey: 'coverage',      key: 'nav.coverage' },
-    { href: '/dependencies',   iconKey: 'dependencies',  key: 'nav.dependencies' },
-    { href: '/feedback',       iconKey: 'feedback',      key: 'nav.feedback' },
+    { href: '/architecture',   iconKey: 'architecture',  key: 'nav.architecture' },
+  ], subgroups: [
+    { id: 'graph', titleKey: 'nav.graph', defaultOpen: false, items: [
+      { href: '/relationships',  iconKey: 'relationships', key: 'nav.relationships' },
+      { href: '/concerns',       iconKey: 'concerns',      key: 'nav.concerns' },
+      { href: '/dependencies',   iconKey: 'dependencies',  key: 'nav.dependencies' },
+      { href: '/coverage',       iconKey: 'coverage',      key: 'nav.coverage' },
+    ]},
   ]},
-  { titleKey: 'nav.ingest', items: [
+  { id: 'data', titleKey: 'nav.data', defaultOpen: true, items: [
+    { href: '/packages',     iconKey: 'packages',   key: 'nav.packages' },
+    { href: '/feedback',     iconKey: 'feedback',   key: 'nav.feedback' },
     { href: '/sessions',     iconKey: 'sessions',   key: 'nav.sessions' },
-    { href: '/templates',    iconKey: 'templates',  key: 'nav.templates' },
+  ]},
+  { id: 'pipeline', titleKey: 'nav.pipeline', defaultOpen: false, items: [
     { href: '/run',          iconKey: 'run',        key: 'nav.run' },
-    { href: '/group',        iconKey: 'group',      key: 'nav.group' },
     { href: '/design',       iconKey: 'design',     key: 'nav.design' },
+    { href: '/group',        iconKey: 'group',      key: 'nav.group' },
     { href: '/localize',     iconKey: 'localize',   key: 'nav.localize' },
     { href: '/history',      iconKey: 'history',    key: 'nav.history' },
+    { href: '/schedule',     iconKey: 'schedule',   key: 'nav.schedule' },
   ]},
-  { titleKey: 'nav.admin', items: [
+  { id: 'admin', titleKey: 'nav.admin', defaultOpen: false, items: [
     { href: '/onboarding',   iconKey: 'onboarding', key: 'nav.onboarding' },
-    { href: '/query',        iconKey: 'query',   key: 'nav.query' },
-    { href: '/system',       iconKey: 'system',  key: 'nav.system' },
-    { href: '/packages',     iconKey: 'packages',   key: 'nav.packages' },
+    { href: '/templates',    iconKey: 'templates',   key: 'nav.templates' },
+    { href: '/query',        iconKey: 'query',       key: 'nav.query' },
+    { href: '/system',       iconKey: 'system',      key: 'nav.system' },
   ]},
 ]
+
+// ── Collapse state (localStorage) ──────────────────
+
+function _collapseKey(id) { return 'ckg-nav-' + id }
+
+function isOpen(id, defaultOpen) {
+  var stored = localStorage.getItem(_collapseKey(id))
+  if (stored !== null) return stored === '1'
+  return defaultOpen
+}
+
+function toggleSection(id) {
+  var key = _collapseKey(id)
+  var cur = localStorage.getItem(key)
+  // if never stored, it was showing default — toggle away from default
+  var section = NAV.find(function(s) { return s.id === id })
+  var sub = null
+  NAV.forEach(function(s) { (s.subgroups || []).forEach(function(sg) { if (sg.id === id) sub = sg }) })
+  var def = section ? section.defaultOpen : (sub ? sub.defaultOpen : true)
+  var wasOpen = cur !== null ? cur === '1' : def
+  localStorage.setItem(key, wasOpen ? '0' : '1')
+  renderSidebar()
+}
+
+// Check if any href in items/subgroups matches current path
+function sectionContainsPath(sec, path) {
+  var found = sec.items.some(function(item) { return item.href === path })
+  if (!found && sec.subgroups) {
+    sec.subgroups.forEach(function(sg) {
+      if (sg.items.some(function(item) { return item.href === path })) found = true
+    })
+  }
+  return found
+}
+
+function renderNavItems(items, cur) {
+  return items.map(function(item) {
+    var active = cur === item.href ? ' active' : ''
+    return '<a href="' + item.href + '" class="nav-item' + active + '"><span class="nav-icon">' + (ICONS[item.iconKey] || '') + '</span>' + t(item.key) + '</a>'
+  }).join('')
+}
 
 function renderSidebar() {
   var el = document.getElementById('sidebar')
   if (!el) return
   var cur = location.pathname.replace(/\/$/, '') || '/overview'
   var toggleLabel = _lang === 'en' ? '中' : 'EN'
+
   var navHtml = NAV.map(function(sec) {
-    var title = t(sec.titleKey)
-    var items = sec.items.map(function(item) {
-      var active = cur === item.href ? ' active' : ''
-      return '<a href="' + item.href + '" class="nav-item' + active + '"><span class="nav-icon">' + (ICONS[item.iconKey] || '') + '</span>' + t(item.key) + '</a>'
-    }).join('')
-    return '<div class="sidebar-section">' + title + '</div>' + items
+    var containsCur = sectionContainsPath(sec, cur)
+    var open = containsCur || isOpen(sec.id, sec.defaultOpen)
+    var openCls = open ? ' open' : ''
+    var html = '<div class="sidebar-section' + openCls + '" data-section="' + sec.id + '">'
+      + '<span class="section-label">' + t(sec.titleKey) + '</span>'
+      + CHEVRON_SVG
+      + '</div>'
+
+    if (open) {
+      html += '<div class="section-items">'
+      html += renderNavItems(sec.items, cur)
+
+      // Render subgroups (e.g. Graph)
+      if (sec.subgroups) {
+        sec.subgroups.forEach(function(sg) {
+          var sgContains = sg.items.some(function(item) { return item.href === cur })
+          var sgOpen = sgContains || isOpen(sg.id, sg.defaultOpen)
+          var sgOpenCls = sgOpen ? ' open' : ''
+          html += '<div class="sidebar-subgroup' + sgOpenCls + '" data-section="' + sg.id + '">'
+            + '<span class="subgroup-icon">' + (ICONS[sg.id] || '') + '</span>'
+            + '<span class="subgroup-label">' + t(sg.titleKey) + '</span>'
+            + CHEVRON_SVG
+            + '</div>'
+          if (sgOpen) {
+            html += '<div class="subgroup-items">'
+            html += renderNavItems(sg.items, cur)
+            html += '</div>'
+          }
+        })
+      }
+      html += '</div>'
+    }
+    return html
   }).join('')
+
   el.innerHTML = '<div class="sidebar-brand"><h1>' + t('brand.name') + '</h1></div>'
     + '<div class="sidebar-search"><div class="search-input-wrap" id="searchTrigger"><span class="search-icon">' + ICONS.search + '</span><span class="search-placeholder">' + t('search.placeholder') + '</span><kbd class="search-kbd">/</kbd></div></div>'
     + '<div class="sidebar-nav">' + navHtml + '</div>'
     + '<div class="sidebar-footer"><button class="lang-toggle" id="langToggleBtn">' + toggleLabel + '</button></div>'
+
+  // Bind section toggle clicks
+  el.querySelectorAll('.sidebar-section, .sidebar-subgroup').forEach(function(header) {
+    header.addEventListener('click', function() {
+      toggleSection(header.dataset.section)
+    })
+  })
+
   document.getElementById('langToggleBtn').addEventListener('click', function() {
     _lang = _lang === 'en' ? 'zh' : 'en'
     localStorage.setItem('ckg-lang', _lang)
@@ -190,34 +291,34 @@ function injectStyles() {
   var style = document.createElement('style')
   style.id = 'ckg-sidebar-extra'
   style.textContent = [
-    '.sidebar-footer { padding:12px 14px; border-top:1px solid var(--border-subtle,#1e232d); }',
-    '.lang-toggle { display:flex; align-items:center; justify-content:center; width:36px; height:28px; border-radius:6px; border:1px solid var(--border,#262c38); background:var(--surface-2,#1c2029); color:var(--text-dim,#5c6478); font-size:12px; font-weight:600; cursor:pointer; transition:all 0.15s; font-family:var(--sans,"DM Sans",sans-serif); }',
-    '.lang-toggle:hover { color:var(--text,#e2e6f0); border-color:var(--accent,#4d8eff); background:var(--accent-surface,rgba(77,142,255,0.08)); }',
-    '.sidebar-search { padding:12px 12px 4px; }',
-    '.search-input-wrap { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--surface-1,#161a22); border:1px solid var(--border-subtle,#1e232d); border-radius:6px; cursor:pointer; transition:all 0.15s; }',
-    '.search-input-wrap:hover { border-color:var(--accent,#4d8eff); background:var(--surface-2,#1c2029); }',
-    '.search-icon { display:flex; align-items:center; color:var(--text-dim,#5c6478); opacity:0.6; }',
-    '.search-placeholder { font-size:12px; color:var(--text-dim,#5c6478); flex:1; }',
-    '.search-kbd { font-family:"JetBrains Mono",monospace; font-size:10px; padding:1px 6px; border-radius:3px; background:var(--surface-3,#232832); color:var(--text-dim,#5c6478); border:1px solid var(--border,#2a2f3a); }',
-    '.search-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:100; backdrop-filter:blur(4px); justify-content:center; padding-top:min(20vh,160px); }',
+    '.sidebar-footer { padding:14px 16px; border-top:1px solid var(--border-subtle,#1b2230); }',
+    '.lang-toggle { display:flex; align-items:center; justify-content:center; width:36px; height:30px; border-radius:8px; border:1px solid var(--border,#252d3a); background:var(--surface-2,#1a1f2a); color:var(--text-dim,#5a6580); font-size:12px; font-weight:600; cursor:pointer; transition:all 0.3s cubic-bezier(0.16,1,0.3,1); font-family:var(--sans,"DM Sans",sans-serif); }',
+    '.lang-toggle:hover { color:var(--text,#e4e8f2); border-color:var(--accent,#4d8eff); background:var(--accent-surface,rgba(77,142,255,0.08)); box-shadow:0 0 12px rgba(77,142,255,0.1); }',
+    '.sidebar-search { padding:14px 14px 6px; }',
+    '.search-input-wrap { display:flex; align-items:center; gap:8px; padding:9px 14px; background:var(--surface-1,#141820); border:1px solid var(--border-subtle,#1b2230); border-radius:8px; cursor:pointer; transition:all 0.3s cubic-bezier(0.16,1,0.3,1); }',
+    '.search-input-wrap:hover { border-color:var(--border-hover,#3a4458); background:var(--surface-2,#1a1f2a); box-shadow:0 0 12px rgba(77,142,255,0.06); }',
+    '.search-icon { display:flex; align-items:center; color:var(--text-dim,#5a6580); opacity:0.6; }',
+    '.search-placeholder { font-size:12px; color:var(--text-dim,#5a6580); flex:1; }',
+    '.search-kbd { font-family:"JetBrains Mono",monospace; font-size:10px; padding:2px 7px; border-radius:4px; background:var(--surface-3,#222834); color:var(--text-dim,#5a6580); border:1px solid var(--border,#252d3a); }',
+    '.search-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.65); z-index:100; backdrop-filter:blur(8px); justify-content:center; padding-top:min(20vh,160px); }',
     '.search-overlay.open { display:flex; }',
-    '.search-modal { width:600px; max-height:70vh; background:var(--surface-0,#11141a); border:1px solid var(--border,#262c38); border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; display:flex; flex-direction:column; }',
-    '.search-modal-input { padding:16px 20px; border-bottom:1px solid var(--border-subtle,#1e232d); display:flex; align-items:center; gap:12px; }',
-    '.search-modal-input input { flex:1; background:transparent; border:none; outline:none; color:var(--text,#e2e6f0); font-size:16px; font-family:"DM Sans",sans-serif; }',
-    '.search-modal-input input::placeholder { color:var(--text-dim,#5c6478); }',
+    '.search-modal { width:600px; max-height:70vh; background:var(--surface-0,#0f1219); border:1px solid var(--border-hover,#3a4458); border-radius:16px; box-shadow:0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03); overflow:hidden; display:flex; flex-direction:column; }',
+    '.search-modal-input { padding:18px 22px; border-bottom:1px solid var(--border-subtle,#1b2230); display:flex; align-items:center; gap:12px; }',
+    '.search-modal-input input { flex:1; background:transparent; border:none; outline:none; color:var(--text,#e4e8f2); font-size:16px; font-family:"DM Sans",sans-serif; }',
+    '.search-modal-input input::placeholder { color:var(--text-dim,#5a6580); }',
     '.search-results { overflow-y:auto; flex:1; padding:8px; }',
-    '.sr-section { padding:4px 12px; font-size:10px; font-weight:700; color:var(--text-dim,#5c6478); text-transform:uppercase; letter-spacing:1px; }',
-    '.sr-item { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; cursor:pointer; transition:background 0.1s; text-decoration:none; }',
-    '.sr-item:hover { background:var(--surface-2,#1c2029); }',
-    '.sr-item .sr-icon { width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; }',
-    '.sr-item .sr-icon.decision { background:rgba(77,142,255,0.08); color:var(--accent,#4d8eff); }',
-    '.sr-item .sr-icon.entity { background:rgba(52,210,123,0.08); color:var(--green,#34d27b); }',
-    '.sr-item .sr-icon.keyword { background:rgba(232,185,49,0.08); color:var(--yellow,#e8b931); }',
+    '.sr-section { padding:6px 14px; font-size:10px; font-weight:700; color:var(--text-dim,#5a6580); text-transform:uppercase; letter-spacing:1.2px; }',
+    '.sr-item { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:10px; cursor:pointer; transition:all 0.15s; text-decoration:none; }',
+    '.sr-item:hover { background:var(--surface-2,#1a1f2a); }',
+    '.sr-item .sr-icon { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; }',
+    '.sr-item .sr-icon.decision { background:rgba(77,142,255,0.1); color:var(--accent,#4d8eff); }',
+    '.sr-item .sr-icon.entity { background:rgba(52,210,123,0.1); color:var(--green,#34d27b); }',
+    '.sr-item .sr-icon.keyword { background:rgba(232,185,49,0.1); color:var(--yellow,#e8b931); }',
     '.sr-item .sr-body { flex:1; min-width:0; }',
-    '.sr-item .sr-title { font-size:13px; font-weight:500; color:var(--text,#e2e6f0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
-    '.sr-item .sr-sub { font-size:11px; color:var(--text-dim,#5c6478); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
-    '.sr-item .sr-badge { font-size:10px; font-family:"JetBrains Mono",monospace; padding:2px 6px; border-radius:3px; background:var(--surface-3,#232832); color:var(--text-dim,#5c6478); flex-shrink:0; }',
-    '.search-no-results { text-align:center; padding:30px; color:var(--text-dim,#5c6478); font-size:13px; }',
+    '.sr-item .sr-title { font-size:13px; font-weight:500; color:var(--text,#e4e8f2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
+    '.sr-item .sr-sub { font-size:11px; color:var(--text-dim,#5a6580); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
+    '.sr-item .sr-badge { font-size:10px; font-family:"JetBrains Mono",monospace; padding:2px 8px; border-radius:100px; background:var(--surface-3,#222834); color:var(--text-dim,#5a6580); flex-shrink:0; }',
+    '.search-no-results { text-align:center; padding:30px; color:var(--text-dim,#5a6580); font-size:13px; }',
     '.nav-icon { width:20px; height:16px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }',
     '.nav-icon svg { width:16px; height:16px; }',
     '.nav-item.active .nav-icon { color:var(--accent,#4d8eff); }',

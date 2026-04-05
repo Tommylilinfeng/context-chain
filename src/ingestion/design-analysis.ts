@@ -14,11 +14,14 @@
 import { Session } from 'neo4j-driver'
 import { AIProvider } from '../ai/types'
 import { parseJsonSafe, toNum, runWithConcurrency, extractFunctionCode } from './shared'
+import fs from 'fs'
+import path from 'path'
 import {
   SubModuleInput,
   SubModuleOutput,
   MisassignedFunction,
-  ReassignmentOutput,
+  SubModuleTarget,
+  SubModuleReassignmentOutput,
   DesignAnalysisResult,
   buildSubModulePrompt,
   buildMisassignedReassignmentPrompt,
@@ -331,8 +334,8 @@ export function formatStatsReport(stats: RepoModuleStats): string {
 
 export interface BackfillResult {
   fileLevelAdded: number     // orphans backfilled via same-file majority
-  dirModulesCreated: number  // new directory-based modules for fully-orphan files
-  dirFunctionsAdded: number  // functions added to directory modules
+  dirModulesCreated: number  // kept for backward compat (always 0 now)
+  dirFunctionsAdded: number  // orphans assigned via directory affinity
   stillOrphan: number        // could not resolve
   filesProcessed: number
 }
@@ -428,82 +431,77 @@ export async function backfillOrphanFunctions(
 
   onProgress(`  File-level: ${result.fileLevelAdded} orphans backfilled from ${result.filesProcessed} files`)
 
-  // ── Step 3: Create directory-based modules for fully-orphan files ──
+  // ── Step 3: Assign fully-orphan files to existing modules by directory affinity ──
+  // Instead of creating new dir_* modules, find the most relevant existing module
+  // by looking at what modules dominate the same or parent directory.
   if (fullyOrphanFiles.length > 0) {
-    const MIN_MODULE_SIZE = 10 // directories with fewer fns get merged to parent
-
-    // Pass 1: Group orphan files by sub-directory (2 levels deep)
-    type DirGroup = { files: string[]; fns: { name: string; filePath: string }[] }
-    const dirGroups = new Map<string, DirGroup>()
-    for (const filePath of fullyOrphanFiles) {
-      const parts = filePath.split('/')
-      const dir = parts.length > 2 ? parts.slice(0, 2).join('/') : parts.length > 1 ? parts[0] : '.'
-      if (!dirGroups.has(dir)) dirGroups.set(dir, { files: [], fns: [] })
-      const group = dirGroups.get(dir)!
-      group.files.push(filePath)
-      for (const fn of fileMap.get(filePath) || []) {
-        group.fns.push({ name: fn.name, filePath })
-      }
-    }
-
-    // Pass 2: Merge small directories into parent
-    const finalGroups = new Map<string, DirGroup>()
-    for (const [dir, group] of Array.from(dirGroups.entries())) {
-      if (group.fns.length >= MIN_MODULE_SIZE) {
-        // Big enough — keep as-is
-        finalGroups.set(dir, group)
-      } else {
-        // Too small — merge into parent directory
-        const parentDir = dir.includes('/') ? dir.split('/')[0] : '.'
-        if (!finalGroups.has(parentDir)) finalGroups.set(parentDir, { files: [], fns: [] })
-        const parent = finalGroups.get(parentDir)!
-        parent.files.push(...group.files)
-        parent.fns.push(...group.fns)
-      }
-    }
-
-    const now = new Date().toISOString()
-    for (const [dir, group] of Array.from(finalGroups.entries())) {
-      if (group.fns.length === 0) continue
-
-      const moduleId = `dir_${dir.replace(/[\/\\]/g, '_')}`
-      const moduleName = `[dir] ${dir}`
-
-      if (!dryRun) {
-        await session.run(
-          `MERGE (sm:SemanticModule {id: $id})
-           ON CREATE SET sm.name = $name, sm.repo = $repo,
-             sm.description = $desc, sm.source = 'backfill_directory',
-             sm.created_at = $now, sm.function_count = $fnCount`,
-          {
-            id: moduleId, name: moduleName, repo,
-            desc: `Directory-based module for orphan files in ${dir}/`,
-            now, fnCount: group.fns.length,
+    // Build directory → dominant module mapping from ALL assigned functions
+    const dirModuleCounts = new Map<string, Map<string, number>>()
+    for (const [fp, fns] of Array.from(fileMap.entries())) {
+      for (const fn of fns) {
+        if (fn.moduleIds.length === 0) continue
+        // Register at multiple directory levels for broader matching
+        const parts = fp.split('/')
+        for (let depth = 1; depth <= Math.min(3, parts.length - 1); depth++) {
+          const dir = parts.slice(0, depth).join('/')
+          if (!dirModuleCounts.has(dir)) dirModuleCounts.set(dir, new Map())
+          const counts = dirModuleCounts.get(dir)!
+          for (const mid of fn.moduleIds) {
+            counts.set(mid, (counts.get(mid) || 0) + 1)
           }
-        )
+        }
+      }
+    }
 
-        const BATCH = 100
-        for (let i = 0; i < group.fns.length; i += BATCH) {
-          const batch = group.fns.slice(i, i + BATCH)
-          const pairs = batch.map(f => ({ fnName: f.name, filePath: f.filePath }))
-          await session.run(
-            `UNWIND $pairs AS p
-             MATCH (fn:CodeEntity {entity_type: 'function', name: p.fnName, repo: $repo})
-             MATCH (file:CodeEntity {entity_type: 'file', path: p.filePath, repo: $repo})-[:CONTAINS]->(fn)
-             MATCH (sm:SemanticModule {id: $modId})
-             WHERE NOT (fn)-[:BELONGS_TO]->(sm)
-             CREATE (fn)-[:BELONGS_TO]->(sm)`,
-            { pairs, repo, modId: moduleId }
-          )
+    // For each fully-orphan file, find the best module by directory affinity
+    let dirAssigned = 0
+    let dirUnmatched = 0
+    for (const filePath of fullyOrphanFiles) {
+      const fns = fileMap.get(filePath) || []
+      if (fns.length === 0) continue
+
+      // Try matching at decreasing directory depth
+      const parts = filePath.split('/')
+      let bestModuleId: string | null = null
+      for (let depth = Math.min(3, parts.length - 1); depth >= 1; depth--) {
+        const dir = parts.slice(0, depth).join('/')
+        const counts = dirModuleCounts.get(dir)
+        if (counts && counts.size > 0) {
+          // Pick the module with the most functions in this directory
+          let maxCount = 0
+          for (const [mid, cnt] of Array.from(counts.entries())) {
+            if (cnt > maxCount) { maxCount = cnt; bestModuleId = mid }
+          }
+          break
         }
       }
 
-      result.dirModulesCreated++
-      result.dirFunctionsAdded += group.fns.length
-      onProgress(`    [dir] ${dir}: ${group.fns.length} fns from ${group.files.length} files`)
+      if (!bestModuleId) {
+        dirUnmatched += fns.length
+        continue
+      }
+
+      if (!dryRun) {
+        const orphanNames = fns.map(f => f.name)
+        const BATCH = 100
+        for (let i = 0; i < orphanNames.length; i += BATCH) {
+          const batch = orphanNames.slice(i, i + BATCH)
+          await session.run(
+            `UNWIND $names AS fnName
+             MATCH (fn:CodeEntity {entity_type: 'function', name: fnName, repo: $repo})
+             MATCH (file:CodeEntity {entity_type: 'file', path: $filePath, repo: $repo})-[:CONTAINS]->(fn)
+             MATCH (sm:SemanticModule {id: $modId})
+             WHERE NOT (fn)-[:BELONGS_TO]->(sm)
+             CREATE (fn)-[:BELONGS_TO]->(sm)`,
+            { names: batch, repo, filePath, modId: bestModuleId }
+          )
+        }
+      }
+      dirAssigned += fns.length
     }
 
-    onProgress(`  Dir-level: ${result.dirModulesCreated} new modules, ${result.dirFunctionsAdded} functions`)
+    result.dirFunctionsAdded = dirAssigned
+    onProgress(`  Dir-affinity: ${dirAssigned} orphans assigned to existing modules, ${dirUnmatched} unmatched`)
   }
 
   onProgress(`  Total: +${result.fileLevelAdded} file-level, +${result.dirFunctionsAdded} in ${result.dirModulesCreated} dir-modules, ${result.stillOrphan} still orphan`)
@@ -544,10 +542,14 @@ async function runLayer2(
 
   onProgress(`Layer 2: Decomposing ${modules.length} modules (concurrency=${concurrency})`)
   let completed = 0
+  let totalSubModules = 0
+  let totalTokens = 0
+  const allMisassigned: MisassignedFunction[] = []
+  const now = new Date().toISOString()
 
-  // Phase 1: Run AI calls concurrently
-  const results = await runWithConcurrency(modules, concurrency, async (mod): Promise<Layer2ModuleResult> => {
-    if (shouldAbort()) return { subModules: [], misassigned: [], tokens: 0, moduleName: mod.moduleName, moduleId: mod.moduleId, functions: mod.functions }
+  // Each worker: LLM call → parse → write to graph immediately
+  await runWithConcurrency(modules, concurrency, async (mod) => {
+    if (shouldAbort()) return
 
     const idx = ++completed
     onProgress(`  [${idx}/${modules.length}] Decomposing ${mod.moduleName} (${mod.functions.length} fns)`)
@@ -560,12 +562,17 @@ async function runLayer2(
       internalCallEdges: mod.callEdges,
     }
 
+    let subModules: { subId: string; name: string; description: string; confidence: number; functionNames: string[] }[] = []
+    let misassigned: MisassignedFunction[] = []
+    let tokens = 0
+
     try {
       const raw = await ai.call(buildSubModulePrompt(input), { timeoutMs: 600000 })
-      const tokens = (ai.lastUsage?.input_tokens ?? 0) + (ai.lastUsage?.output_tokens ?? 0)
+      tokens = (ai.lastUsage?.input_tokens ?? 0) + (ai.lastUsage?.output_tokens ?? 0)
+      totalTokens += tokens
       const parsed = parseJsonSafe<SubModuleOutput>(raw, { subModules: [], misassigned: [] })
 
-      const misassigned: MisassignedFunction[] = (parsed.misassigned ?? []).map(m => {
+      misassigned = (parsed.misassigned ?? []).map(m => {
         const fn = mod.functions.find(f => f.name === m.functionName)
         return {
           functionKey: fn ? `${fn.filePath}::${m.functionName}` : m.functionName,
@@ -575,8 +582,9 @@ async function runLayer2(
           suggestedModule: m.suggestedModule,
         }
       })
+      allMisassigned.push(...misassigned)
 
-      const subModules = parsed.subModules.map(sub => ({
+      subModules = parsed.subModules.map(sub => ({
         subId: `${mod.moduleId}_${sub.subModuleId}`,
         name: sub.name,
         description: sub.description,
@@ -584,30 +592,19 @@ async function runLayer2(
         functionNames: sub.functionNames,
       }))
 
-      onProgress(`  ✓ ${mod.moduleName}: ${subModules.length} sub-modules, ${misassigned.length} misassigned`)
-      return { subModules, misassigned, tokens, moduleName: mod.moduleName, moduleId: mod.moduleId, functions: mod.functions }
+      onProgress(`  ✓ ${mod.moduleName}: ${subModules.length} sub-modules, ${misassigned.length} misassigned (${tokens.toLocaleString()} tokens)`)
     } catch (err: any) {
       onProgress(`  ⚠ ${mod.moduleName} failed: ${err.message}`)
-      return { subModules: [], misassigned: [], tokens: 0, moduleName: mod.moduleName, moduleId: mod.moduleId, functions: mod.functions }
-    }
-  })
-
-  // Phase 2: Write to graph sequentially (fast, no AI)
-  const now = new Date().toISOString()
-  let totalSubModules = 0
-  let totalTokens = 0
-  const allMisassigned: MisassignedFunction[] = []
-
-  for (const r of results) {
-    totalTokens += r.tokens
-    allMisassigned.push(...r.misassigned)
-
-    if (dryRun || r.subModules.length === 0) {
-      totalSubModules += r.subModules.length
-      continue
+      return
     }
 
-    for (const sub of r.subModules) {
+    // Write immediately (no waiting for other modules)
+    if (dryRun || subModules.length === 0) {
+      totalSubModules += subModules.length
+      return
+    }
+
+    for (const sub of subModules) {
       await session.run(
         `CREATE (sub:SubModule {
           id: $id, name: $name, description: $description,
@@ -615,48 +612,71 @@ async function runLayer2(
           confidence: $confidence, function_count: $fnCount,
           created_at: $now, source: 'design_analysis'
         })`,
-        {
-          id: sub.subId, name: sub.name, description: sub.description,
-          repo, parentModuleId: r.moduleId,
-          confidence: sub.confidence,
-          fnCount: sub.functionNames.length, now,
-        }
+        { id: sub.subId, name: sub.name, description: sub.description, repo, parentModuleId: mod.moduleId,
+          confidence: sub.confidence, fnCount: sub.functionNames.length, now },
       )
-
       await session.run(
-        `MATCH (sub:SubModule {id: $subId})
-         MATCH (sm:SemanticModule {id: $parentId})
-         MERGE (sub)-[:CHILD_OF]->(sm)`,
-        { subId: sub.subId, parentId: r.moduleId }
+        `MATCH (sub:SubModule {id: $subId}) MATCH (sm:SemanticModule {id: $parentId}) MERGE (sub)-[:CHILD_OF]->(sm)`,
+        { subId: sub.subId, parentId: mod.moduleId },
       )
 
       const matchedFns = sub.functionNames
-        .map(name => r.functions.find(f => f.name === name))
+        .map(name => mod.functions.find(f => f.name === name))
         .filter((f): f is ModuleFunction => f != null)
-
       const BATCH = 50
       for (let j = 0; j < matchedFns.length; j += BATCH) {
-        const batch = matchedFns.slice(j, j + BATCH)
-        const pairs = batch.map(f => ({ fnName: f.name, filePath: f.filePath }))
+        const pairs = matchedFns.slice(j, j + BATCH).map(f => ({ fnName: f.name, filePath: f.filePath }))
         await session.run(
           `UNWIND $pairs AS p
            MATCH (fn:CodeEntity {entity_type: 'function', name: p.fnName, repo: $repo})
            MATCH (f:CodeEntity {entity_type: 'file', path: p.filePath})-[:CONTAINS]->(fn)
            MATCH (sub:SubModule {id: $subId})
            MERGE (fn)-[:BELONGS_TO]->(sub)`,
-          { pairs, repo, subId: sub.subId }
+          { pairs, repo, subId: sub.subId },
         )
       }
-
       totalSubModules++
     }
-  }
+
+    // Per-module "Other" for functions LLM didn't assign
+    const orphanRes = await session.run(
+      `MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sm:SemanticModule {id: $moduleId})
+       OPTIONAL MATCH (fn)-[:BELONGS_TO]->(existingSub:SubModule)
+       WITH fn, existingSub WHERE existingSub IS NULL
+       RETURN count(fn) AS cnt`,
+      { moduleId: mod.moduleId },
+    )
+    const orphanCount = toNum(orphanRes.records[0]?.get('cnt'))
+    if (orphanCount > 0) {
+      const catchAllId = `${mod.moduleId}_other`
+      await session.run(
+        `MERGE (sub:SubModule {id: $id})
+         ON CREATE SET sub.name = 'Other / Unclassified', sub.description = 'Functions not assigned to a specific sub-module',
+           sub.repo = $repo, sub.parentModuleId = $moduleId, sub.confidence = 0.5, sub.function_count = $cnt,
+           sub.created_at = $now, sub.source = 'design_analysis_backfill'
+         ON MATCH SET sub.function_count = $cnt`,
+        { id: catchAllId, repo, moduleId: mod.moduleId, cnt: orphanCount, now },
+      )
+      await session.run(
+        `MATCH (sub:SubModule {id: $catchAllId}) MATCH (sm:SemanticModule {id: $moduleId}) MERGE (sub)-[:CHILD_OF]->(sm)`,
+        { catchAllId, moduleId: mod.moduleId },
+      )
+      await session.run(
+        `MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sm:SemanticModule {id: $moduleId})
+         OPTIONAL MATCH (fn)-[:BELONGS_TO]->(existingSub:SubModule)
+         WITH fn, existingSub WHERE existingSub IS NULL
+         MATCH (sub:SubModule {id: $catchAllId}) MERGE (fn)-[:BELONGS_TO]->(sub)`,
+        { moduleId: mod.moduleId, catchAllId },
+      )
+      onProgress(`  + ${mod.moduleName}: ${orphanCount} orphan functions → "Other" sub-module`)
+    }
+  })
 
   onProgress(`Layer 2 done: ${totalSubModules} sub-modules, ${allMisassigned.length} misassigned`)
   return { subModulesCreated: totalSubModules, misassigned: allMisassigned, tokens: totalTokens }
 }
 
-// ── Layer 2.5: Misassigned Reassignment ─────────────────
+// ── Layer 2.5: Misassigned → SubModule Reassignment ──────
 
 async function runLayer2_5(
   session: Session,
@@ -672,18 +692,21 @@ async function runLayer2_5(
     return { reassigned: 0, infrastructure: 0, tokens: 0 }
   }
 
-  // Get all modules for context (shared across batches)
-  const modRes = await session.run(
-    `MATCH (sm:SemanticModule {repo: $repo})
-     RETURN sm.id AS id, sm.name AS name, sm.description AS description
-     ORDER BY sm.name`,
-    { repo }
+  // Get all SubModules across the entire repo (created by Layer 2)
+  const subRes = await session.run(
+    `MATCH (sub:SubModule {repo: $repo})-[:CHILD_OF]->(sm:SemanticModule)
+     RETURN sub.id AS subId, sub.name AS name, sub.description AS description, sm.name AS parentName
+     ORDER BY sm.name, sub.name`,
+    { repo },
   )
-  const allModules = modRes.records.map(r => ({
-    moduleId: r.get('id'),
-    name: r.get('name'),
-    description: r.get('description') ?? '',
+  const allSubModules: SubModuleTarget[] = subRes.records.map(r => ({
+    subModuleId: r.get('subId') as string,
+    name: r.get('name') as string,
+    description: (r.get('description') as string) || '',
+    parentModuleName: r.get('parentName') as string,
   }))
+
+  onProgress(`Layer 2.5: ${allSubModules.length} sub-modules available as targets`)
 
   // Batch misassigned into chunks of 80
   const BATCH_SIZE = 80
@@ -692,24 +715,31 @@ async function runLayer2_5(
     batches.push(misassigned.slice(i, i + BATCH_SIZE))
   }
 
-  onProgress(`Layer 2.5: Reassigning ${misassigned.length} misassigned functions in ${batches.length} batches (concurrency=${concurrency})`)
+  onProgress(`Layer 2.5: Reassigning ${misassigned.length} misassigned functions to sub-modules in ${batches.length} batches`)
 
-  // Run batches concurrently
   let completed = 0
-  const batchResults = await runWithConcurrency(batches, concurrency, async (batch): Promise<ReassignmentOutput & { tokens: number }> => {
+  const batchResults = await runWithConcurrency(batches, concurrency, async (batch): Promise<SubModuleReassignmentOutput & { tokens: number }> => {
     const idx = ++completed
     onProgress(`  [${idx}/${batches.length}] Reassigning batch of ${batch.length}`)
 
     try {
-      const raw = await ai.call(buildMisassignedReassignmentPrompt(batch, allModules), { timeoutMs: 600000 })
+      const raw = await ai.call(buildMisassignedReassignmentPrompt(batch, allSubModules), { timeoutMs: 600000 })
       const tokens = (ai.lastUsage?.input_tokens ?? 0) + (ai.lastUsage?.output_tokens ?? 0)
-      const parsed = parseJsonSafe<ReassignmentOutput>(raw, { reassignments: [], infrastructure: [] })
+      const parsed = parseJsonSafe<SubModuleReassignmentOutput>(raw, { reassignments: [], infrastructure: [] })
       return { ...parsed, tokens }
     } catch (err: any) {
       onProgress(`  ⚠ Batch failed: ${err.message}`)
       return { reassignments: [], infrastructure: [], tokens: 0 }
     }
   })
+
+  // Build SubModule → parent module lookup
+  const subToParent = new Map<string, string>()
+  for (const sub of allSubModules) {
+    // Extract parentModuleId from subModuleId (format: "mod_X_submod_Y")
+    const subIdParts = sub.subModuleId.split('_submod_')
+    if (subIdParts.length >= 2) subToParent.set(sub.subModuleId, subIdParts[0])
+  }
 
   // Aggregate and apply
   let totalReassigned = 0
@@ -731,22 +761,35 @@ async function runLayer2_5(
       const filePath = r.functionKey.slice(0, sep)
       const fnName = r.functionKey.slice(sep + 2)
 
+      // Remove old BELONGS_TO → SemanticModule edges
       await session.run(
         `MATCH (fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
          MATCH (f:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
          MATCH (fn)-[rel:BELONGS_TO]->(sm:SemanticModule)
-         WHERE sm.id <> $targetModuleId
          DELETE rel`,
-        { fnName, filePath, repo, targetModuleId: r.targetModuleId }
+        { fnName, filePath, repo },
       )
 
+      // Add BELONGS_TO → target SubModule
       await session.run(
         `MATCH (fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
          MATCH (f:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
-         MATCH (sm:SemanticModule {id: $targetModuleId})
-         MERGE (fn)-[:BELONGS_TO]->(sm)`,
-        { fnName, filePath, repo, targetModuleId: r.targetModuleId }
+         MATCH (sub:SubModule {id: $targetSubId})
+         MERGE (fn)-[:BELONGS_TO]->(sub)`,
+        { fnName, filePath, repo, targetSubId: r.targetSubModuleId },
       )
+
+      // Also add BELONGS_TO → parent SemanticModule
+      const parentModuleId = subToParent.get(r.targetSubModuleId)
+      if (parentModuleId) {
+        await session.run(
+          `MATCH (fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
+           MATCH (f:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
+           MATCH (sm:SemanticModule {id: $moduleId})
+           MERGE (fn)-[:BELONGS_TO]->(sm)`,
+          { fnName, filePath, repo, moduleId: parentModuleId },
+        )
+      }
 
       totalReassigned++
     }
@@ -757,19 +800,21 @@ async function runLayer2_5(
       const filePath = inf.functionKey.slice(0, sep)
       const fnName = inf.functionKey.slice(sep + 2)
 
+      // Infrastructure: remove all module/submodule edges
       await session.run(
         `MATCH (fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
          MATCH (f:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
-         MATCH (fn)-[rel:BELONGS_TO]->(sm:SemanticModule)
+         MATCH (fn)-[rel:BELONGS_TO]->(target)
+         WHERE target:SemanticModule OR target:SubModule
          DELETE rel`,
-        { fnName, filePath, repo }
+        { fnName, filePath, repo },
       )
 
       totalInfra++
     }
   }
 
-  onProgress(`Layer 2.5 done: ${totalReassigned} reassigned, ${totalInfra} infrastructure`)
+  onProgress(`Layer 2.5 done: ${totalReassigned} reassigned to sub-modules, ${totalInfra} infrastructure`)
   return { reassigned: totalReassigned, infrastructure: totalInfra, tokens: totalTokens }
 }
 
@@ -802,14 +847,7 @@ export async function runDesignAnalysis(opts: DesignAnalysisOpts): Promise<Desig
   }
   onProgress(`Found ${moduleCount} modules for repo "${repo}"`)
 
-  // Layer 0: Backfill orphan functions (skip in single-module mode)
-  if (!moduleIds) {
-    onProgress('Layer 0: Backfilling orphan functions...')
-    const backfill = await backfillOrphanFunctions(dbSession, repo, dryRun, onProgress)
-    onProgress(`Layer 0 done: +${backfill.fileLevelAdded} file-level, +${backfill.dirFunctionsAdded} in ${backfill.dirModulesCreated} dir-modules`)
-  }
-
-  // Get module data (now includes backfilled functions)
+  // Get module data
   let modules = await getModulesWithFunctions(dbSession, repo)
 
   // Filter to specific modules if requested
@@ -829,22 +867,57 @@ export async function runDesignAnalysis(opts: DesignAnalysisOpts): Promise<Desig
 
   // Layer 2: Sub-Module Decomposition
   const layer2 = await runLayer2(dbSession, ai, repo, modules, concurrency, dryRun, shouldAbort, onProgress)
-  if (shouldAbort()) {
-    return {
-      layer2: { subModulesCreated: layer2.subModulesCreated, misassignedCount: layer2.misassigned.length, tokens: layer2.tokens },
-      layer2_5: { reassigned: 0, infrastructure: 0, tokens: 0 },
-      totalTokens: layer2.tokens, durationMs: Date.now() - startTime,
-    }
+
+  // Save misassigned to file for later reassignment via --reassign
+  if (layer2.misassigned.length > 0) {
+    const misassignedPath = path.join('data', `${repo}-misassigned.json`)
+    fs.mkdirSync('data', { recursive: true })
+    fs.writeFileSync(misassignedPath, JSON.stringify(layer2.misassigned, null, 2))
+    onProgress(`Saved ${layer2.misassigned.length} misassigned functions to ${misassignedPath}`)
+    onProgress(`Run with --reassign to assign them to sub-modules`)
   }
 
-  // Layer 2.5: Misassigned Reassignment
-  const layer2_5 = await runLayer2_5(dbSession, ai, repo, layer2.misassigned, concurrency, dryRun, onProgress)
-
-  const totalTokens = layer2.tokens + layer2_5.tokens
   return {
     layer2: { subModulesCreated: layer2.subModulesCreated, misassignedCount: layer2.misassigned.length, tokens: layer2.tokens },
-    layer2_5: { reassigned: layer2_5.reassigned, infrastructure: layer2_5.infrastructure, tokens: layer2_5.tokens },
-    totalTokens,
+    layer2_5: { reassigned: 0, infrastructure: 0, tokens: 0 },
+    totalTokens: layer2.tokens,
     durationMs: Date.now() - startTime,
   }
+}
+
+// ── Reassign misassigned functions (standalone, run after all modules done) ──
+
+export async function runReassignment(opts: {
+  dbSession: Session
+  ai: AIProvider
+  repo: string
+  concurrency?: number
+  dryRun?: boolean
+  onProgress?: (msg: string) => void
+}): Promise<{ reassigned: number; infrastructure: number; tokens: number; durationMs: number }> {
+  const {
+    dbSession, ai, repo,
+    concurrency = 5,
+    dryRun = false,
+    onProgress = () => {},
+  } = opts
+  const startTime = Date.now()
+
+  // Load misassigned from file
+  const misassignedPath = path.join('data', `${repo}-misassigned.json`)
+  if (!fs.existsSync(misassignedPath)) {
+    throw new Error(`No misassigned file found at ${misassignedPath}. Run design-analysis first.`)
+  }
+  const misassigned: MisassignedFunction[] = JSON.parse(fs.readFileSync(misassignedPath, 'utf-8'))
+  onProgress(`Loaded ${misassigned.length} misassigned functions from ${misassignedPath}`)
+
+  const result = await runLayer2_5(dbSession, ai, repo, misassigned, concurrency, dryRun, onProgress)
+
+  // Clean up file after successful reassignment
+  if (!dryRun && result.reassigned > 0) {
+    fs.unlinkSync(misassignedPath)
+    onProgress(`Removed ${misassignedPath}`)
+  }
+
+  return { ...result, durationMs: Date.now() - startTime }
 }
