@@ -11,7 +11,7 @@ Existing context engineering tools (OpenSpec, Git-AI, Dexicon) capture knowledge
 - **Runs overnight on your subscription** — uses `claude -p` or `codex exec` (Claude CLI / Codex CLI), no API costs, doesn't eat your daytime quota
 
 ```
-Codebase → Joern CPG → Module Discovery (Louvain + LLM)
+Codebase → Export Scan → Module Discovery (LLM + IQR + Import Analysis)
     → Design Analysis (sub-module decomposition)
         → LLM extracts decisions per sub-module
             → Memgraph (graph DB) → MCP Server
@@ -146,24 +146,30 @@ When running bulk analysis with batch size > 1, Cluster Analysis groups related 
 
 Enable in Dashboard: **Run** → toggle **Cluster Analysis** on.
 
-### Semantic Module Discovery
+### Module Discovery
 
-Automatically discovers the semantic module structure of a codebase — not just which functions call each other, but what the logical subsystems are and how they relate.
+Automatically discovers the architectural module structure of a codebase using export analysis — no graph algorithms or CALLS edges needed.
 
-**How it works (2-round pipeline, ~13K tokens total):**
-1. **Community detection** — Louvain algorithm on the function call graph (hub functions removed) finds structural clusters
-2. **Round 1: Structure Discovery** — LLM sees community function signatures + call edges, proposes semantic modules (can merge/split communities). Functions can belong to multiple modules.
-3. **Round 2: Boundary Review** — graph analysis identifies boundary functions (called by multiple modules). LLM reviews and adjusts memberships — adds cross-module ownership or removes misassignments.
+**How it works (4-phase pipeline, ~25K tokens total):**
+1. **Export Scan** — extract export names from all TS/TSX/JS files, group by directory (zero LLM cost)
+2. **LLM Chunk + Merge** — split directories into N chunks, N concurrent LLM calls identify subsystems, then 1 merge call deduplicates into 12-20 modules
+3. **IQR Outlier Split** — statistical outlier detection (Tukey's IQR method) flags oversized modules. LLM splits them — unless they're cross-cutting foundation layers, which are kept as-is
+4. **Import Backfill** — orphan files in flat directories (like `utils/`) are assigned by import analysis: files imported by exactly 1 external module go to that module; files imported by 0 or 2+ modules go to a Foundation module
 
-**Output:** `SemanticModule` nodes in the graph with `BELONGS_TO` edges (many-to-many). A function shared across modules is a natural signal for cross-cutting concerns.
+**Key design decisions:**
+- Export names are the richest zero-cost signal — a file's public API reveals its architectural role without reading function bodies
+- IQR outlier detection is project-agnostic — adapts without hardcoded thresholds
+- Foundation modules are kept large intentionally — per DDD's "Shared Kernel" pattern, cross-cutting infrastructure belongs in a dedicated layer
+
+**Output:** `SemanticModule` nodes in the graph with `BELONGS_TO` edges.
 
 ```bash
 npm run discover-modules -- --repo my-repo              # full run
 npm run discover-modules -- --repo my-repo --dry-run    # preview without writing to graph
-npm run discover-modules -- --repo my-repo --hub-threshold 15  # adjust hub detection sensitivity
+npm run discover-modules -- --repo my-repo --chunks 5 --concurrency 5
 ```
 
-Tested on Claude Code (11,991 functions): 72 AST communities → 27 semantic modules, validated against human-curated architecture analysis.
+Tested on Claude Code (1,902 files, 7,867 exports): 22 modules, 100% function coverage, ~213s. Matched 10/14 chapters from [human-curated architecture analysis](https://github.com/Windy3f3f3f3f/how-claude-code-works).
 
 ### Design Analysis
 
@@ -319,7 +325,8 @@ npm run analyze -- --repo X        # Full-scan function analysis
 npm run ingest:sessions:v2         # Session ingestion
 
 # Module Discovery
-npm run discover-modules -- --repo X          # Semantic module discovery (2-round LLM pipeline)
+npm run discover-modules -- --repo X          # Export-based architecture discovery
+npm run discover-modules -- --repo X --dry-run        # Preview without writing to graph
 
 # Design Analysis
 npm run design-analysis -- --repo X --stats               # Module stats + token estimates (no LLM)

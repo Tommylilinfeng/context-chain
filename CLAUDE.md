@@ -29,3 +29,18 @@ Runner 会调用 LLM API，消耗 token 预算。**禁止直接全量运行 runn
 - 不加 `--budget` / `--limit` / `--dry-run` 直接运行全量扫描
 - 连续多次运行 runner "看看效果"
 - 在不确定代码正确性时就跑真实 LLM 调用
+
+## 已知问题 / TODO
+
+### Prompt 数量硬编码
+所有 prompt 里的数量约束都是写死的，应改为根据输入规模动态计算：
+- `module-discovery.ts:109` — `Aim for 15-30 modules`
+- `design-analysis.ts:220` — `Sub-modules should have 3+ functions`
+- `design-analysis.ts:221` — `fewer than 5 sub-modules… (minimum 2)`
+- `design-analysis.ts:303` — `Group closely related decisions (2-8 each)`
+- `design-analysis.ts:305` — `Group related design choices (2-10 each)`
+- `scenario-analysis.ts:107` — `Identify 5-15 typical user scenarios`
+- `scenario-analysis.ts:144` — `Each scenario should have 3-10 steps`
+- `grouping.ts:167` — `Extract 1-3 design decisions`
+
+改进方向：让 prompt 根据函数数量 / 模块规模 / 调用复杂度自适应调整建议范围，而不是固定数字。

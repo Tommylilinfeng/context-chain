@@ -58,10 +58,15 @@ import {
 } from '../ingestion/run-history'
 import { validateAIConfig } from '../ai'
 import { detectCommunities, analyzeConcerns, ConcernAnalysis } from '../ingestion/concern-analysis'
-import { runDesignAnalysis, DesignAnalysisOpts, analyzeModuleStats, backfillOrphanFunctions } from '../ingestion/design-analysis'
+import { runDesignAnalysis, runReassignment, DesignAnalysisOpts, analyzeModuleStats, backfillOrphanFunctions } from '../ingestion/design-analysis'
 import { DesignAnalysisResult } from '../prompts/design-analysis'
 import { discoverModules } from '../ingestion/module-discovery'
 import { DiscoveryResult } from '../prompts/module-discovery'
+import { runScenarioAnalysis, computeSubModuleEdges } from '../ingestion/scenario-analysis'
+import { ScenarioAnalysisResult } from '../prompts/scenario-analysis'
+import { generateArchDocs } from '../ingestion/arch-doc-generation'
+import { ArchDocResult, buildChatContextPrompt, ChatContext } from '../prompts/arch-doc'
+import { extractFunctionCode } from '../ingestion/shared'
 
 const app = new Hono()
 app.use('*', cors())
@@ -269,8 +274,12 @@ app.get('/api/overview', async (c) => {
         embeddedDecisions: embeddedCnt,
         relationshipEdges: relEdgeCnt,
         gapFunctions: gapFnCnt,
-        lastPipelineRun: null,
-        lastScheduledRun: null,
+        pipelines: {
+          run: { status: runJob.status, startedAt: runJob.startedAt || null },
+          group: { status: groupJob.status, startedAt: groupJob.startedAt || null },
+          localize: { status: localizeJob.status, startedAt: localizeJob.startedAt || null },
+          design: { status: designAnalysisJob.status, startedAt: designAnalysisJob.startedAt || null },
+        },
         lastStalenessCheck,
       },
       entityTypes: entityTypes.records.map(r => ({ type: r.get('type'), count: num(r.get('count')) })),
@@ -2807,12 +2816,34 @@ interface GroupJob {
   edgesFound: number
   startedAt: number
   abortRequested: boolean
+  lastError: string | null
 }
 
 const groupJob: GroupJob = {
   status: 'idle', logs: new LogBuffer(), batches: [],
   batchesDone: 0, edgesFound: 0,
-  startedAt: 0, abortRequested: false,
+  startedAt: 0, abortRequested: false, lastError: null,
+}
+
+function persistGroupJob(): void {
+  saveJobState('group', {
+    status: groupJob.status,
+    batchesDone: groupJob.batchesDone,
+    edgesFound: groupJob.edgesFound,
+    startedAt: groupJob.startedAt,
+  })
+  groupJob.logs.flush()
+}
+
+function restoreGroupJob(): void {
+  const saved = loadJobState('group')
+  if (!saved) return
+  if (saved.status === 'running') saved.status = 'interrupted'
+  groupJob.status = saved.status || 'idle'
+  groupJob.batchesDone = saved.batchesDone || 0
+  groupJob.edgesFound = saved.edgesFound || 0
+  groupJob.startedAt = saved.startedAt || 0
+  groupJob.logs = LogBuffer.restore(jobLogPath('group'))
 }
 
 app.get('/api/group/stats', async (c) => {
@@ -2863,11 +2894,14 @@ app.post('/api/group/start', async (c) => {
   // Reset job
   groupJob.status = 'running'
   groupJob.logs.clear()
+  groupJob.logs.bindFile(jobLogPath('group'))
   groupJob.batches = []
   groupJob.batchesDone = 0
   groupJob.edgesFound = 0
   groupJob.startedAt = Date.now()
   groupJob.abortRequested = false
+  groupJob.lastError = null
+  persistGroupJob()
 
   // Run grouping in background
   ;(async () => {
@@ -2952,12 +2986,15 @@ app.post('/api/group/start', async (c) => {
         groupJob.status = 'done'
         pushLog(groupJob.logs,JSON.stringify({ type: 'done', batchesDone: groupJob.batchesDone, edgesFound: groupJob.edgesFound }))
       }
+      persistGroupJob()
       finalizeAndSave(historyRecord)
     } catch (err: any) {
       groupJob.status = 'error'
+      groupJob.lastError = err.message
       historyRecord.errors++
       finalizeAndSave(historyRecord)
       pushLog(groupJob.logs,JSON.stringify({ type: 'error', error: err.message }))
+      persistGroupJob()
     } finally {
       await session.close()
     }
@@ -2972,6 +3009,17 @@ app.post('/api/group/stop', (c) => {
     pushLog(groupJob.logs,JSON.stringify({ type: 'stopping' }))
   }
   return c.json({ status: 'stopping' })
+})
+
+app.get('/api/group/status', (c) => {
+  return c.json({
+    status: groupJob.status,
+    batchesDone: groupJob.batchesDone,
+    edgesFound: groupJob.edgesFound,
+    startedAt: groupJob.startedAt,
+    batches: groupJob.batches,
+    lastError: groupJob.lastError,
+  })
 })
 
 app.get('/api/group/stream', (c) => {
@@ -3018,12 +3066,38 @@ interface LocalizeJob {
   total: number
   startedAt: number
   abortRequested: boolean
+  lastError: string | null
 }
 
 const localizeJob: LocalizeJob = {
   status: 'idle', locale: 'zh', logs: new LogBuffer(),
   translated: 0, failed: 0, total: 0,
-  startedAt: 0, abortRequested: false,
+  startedAt: 0, abortRequested: false, lastError: null,
+}
+
+function persistLocalizeJob(): void {
+  saveJobState('localize', {
+    status: localizeJob.status,
+    locale: localizeJob.locale,
+    translated: localizeJob.translated,
+    failed: localizeJob.failed,
+    total: localizeJob.total,
+    startedAt: localizeJob.startedAt,
+  })
+  localizeJob.logs.flush()
+}
+
+function restoreLocalizeJob(): void {
+  const saved = loadJobState('localize')
+  if (!saved) return
+  if (saved.status === 'running') saved.status = 'interrupted'
+  localizeJob.status = saved.status || 'idle'
+  localizeJob.locale = saved.locale || 'zh'
+  localizeJob.translated = saved.translated || 0
+  localizeJob.failed = saved.failed || 0
+  localizeJob.total = saved.total || 0
+  localizeJob.startedAt = saved.startedAt || 0
+  localizeJob.logs = LogBuffer.restore(jobLogPath('localize'))
 }
 
 app.get('/api/localize/stats', async (c) => {
@@ -3064,11 +3138,14 @@ app.post('/api/localize/start', async (c) => {
   localizeJob.status = 'running'
   localizeJob.locale = locale
   localizeJob.logs.clear()
+  localizeJob.logs.bindFile(jobLogPath('localize'))
   localizeJob.translated = 0
   localizeJob.failed = 0
   localizeJob.total = 0
   localizeJob.startedAt = Date.now()
   localizeJob.abortRequested = false
+  localizeJob.lastError = null
+  persistLocalizeJob()
 
   // Run in background
   ;(async () => {
@@ -3120,9 +3197,12 @@ app.post('/api/localize/start', async (c) => {
           total: result.total, durationMs: result.durationMs,
         }))
       }
+      persistLocalizeJob()
     } catch (err: any) {
       localizeJob.status = 'error'
+      localizeJob.lastError = err.message
       pushLog(localizeJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+      persistLocalizeJob()
     } finally {
       await session.close()
     }
@@ -3147,6 +3227,7 @@ app.get('/api/localize/status', (c) => {
     failed: localizeJob.failed,
     total: localizeJob.total,
     startedAt: localizeJob.startedAt,
+    lastError: localizeJob.lastError,
   })
 })
 
@@ -4180,7 +4261,8 @@ app.post('/api/module-discovery/run', async (c) => {
   const repoName = body.repo || config.repos?.[0]?.name
   const repoConfig = config.repos?.find((r: any) => r.name === repoName)
   if (!repoConfig) return c.json({ error: `Repo "${repoName}" not found` }, 400)
-  const hubThreshold = body.hubThreshold ?? 20
+  const numChunks = body.numChunks ?? 5
+  const concurrency = body.concurrency ?? 5
 
   moduleDiscoveryJob.status = 'running'
   moduleDiscoveryJob.logs.clear()
@@ -4198,27 +4280,16 @@ app.post('/api/module-discovery/run', async (c) => {
         ai,
         repo: repoName,
         repoPath: repoConfig.path,
-        hubThreshold,
         onProgress: (msg) => {
           pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: msg }))
         },
       })
 
-      // Backfill orphan functions (no LLM, pure graph operations)
-      pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: 'Backfilling orphan functions...' }))
-      const backfill = await backfillOrphanFunctions(session, repoName, false, (msg) => {
-        pushLog(moduleDiscoveryJob.logs, JSON.stringify({ type: 'progress', message: msg }))
-      })
-      pushLog(moduleDiscoveryJob.logs, JSON.stringify({
-        type: 'progress',
-        message: `Backfill done: +${backfill.fileLevelAdded} file-level, +${backfill.dirFunctionsAdded} in ${backfill.dirModulesCreated} dir-modules`,
-      }))
-
       moduleDiscoveryJob.result = result
       moduleDiscoveryJob.status = 'done'
       pushLog(moduleDiscoveryJob.logs, JSON.stringify({
         type: 'done',
-        modules: result.stats.finalModules,
+        modules: result.stats.modulesDiscovered,
         totalTokens: result.stats.totalTokens,
         durationMs: result.stats.durationMs,
       }))
@@ -4269,11 +4340,29 @@ interface DesignAnalysisJob {
   result: DesignAnalysisResult | null
   startedAt: number
   abortRequested: boolean
+  lastError: string | null
 }
 
 const designAnalysisJob: DesignAnalysisJob = {
   status: 'idle', logs: new LogBuffer(), result: null,
-  startedAt: 0, abortRequested: false,
+  startedAt: 0, abortRequested: false, lastError: null,
+}
+
+function persistDesignJob(): void {
+  saveJobState('design-analysis', {
+    status: designAnalysisJob.status,
+    startedAt: designAnalysisJob.startedAt,
+  })
+  designAnalysisJob.logs.flush()
+}
+
+function restoreDesignJob(): void {
+  const saved = loadJobState('design-analysis')
+  if (!saved) return
+  if (saved.status === 'running') saved.status = 'interrupted'
+  designAnalysisJob.status = saved.status || 'idle'
+  designAnalysisJob.startedAt = saved.startedAt || 0
+  designAnalysisJob.logs = LogBuffer.restore(jobLogPath('design-analysis'))
 }
 
 app.post('/api/design-analysis/analyze', async (c) => {
@@ -4295,9 +4384,12 @@ app.post('/api/design-analysis/analyze', async (c) => {
 
   designAnalysisJob.status = 'running'
   designAnalysisJob.logs.clear()
+  designAnalysisJob.logs.bindFile(jobLogPath('design-analysis'))
   designAnalysisJob.result = null
   designAnalysisJob.startedAt = Date.now()
   designAnalysisJob.abortRequested = false
+  designAnalysisJob.lastError = null
+  persistDesignJob()
 
   ;(async () => {
     const session = await getSession()
@@ -4316,6 +4408,27 @@ app.post('/api/design-analysis/analyze', async (c) => {
         shouldAbort: () => designAnalysisJob.abortRequested,
         onProgress: (msg) => {
           pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'progress', message: msg }))
+          // Emit structured module-level events by parsing progress patterns
+          const startMatch = msg.match(/^\s*\[(\d+)\/(\d+)\] Decomposing (.+?) \((\d+) fns\)/)
+          if (startMatch) {
+            pushLog(designAnalysisJob.logs, JSON.stringify({
+              type: 'module-start', index: +startMatch[1] - 1, total: +startMatch[2],
+              moduleName: startMatch[3], functionCount: +startMatch[4],
+            }))
+          }
+          const doneMatch = msg.match(/^\s*✓ (.+?): (\d+) sub-modules?, (\d+) misassigned/)
+          if (doneMatch) {
+            pushLog(designAnalysisJob.logs, JSON.stringify({
+              type: 'module-done', moduleName: doneMatch[1],
+              subModules: +doneMatch[2], misassigned: +doneMatch[3],
+            }))
+          }
+          const errMatch = msg.match(/^\s*⚠ (.+?) failed: (.+)/)
+          if (errMatch) {
+            pushLog(designAnalysisJob.logs, JSON.stringify({
+              type: 'module-error', moduleName: errMatch[1], error: errMatch[2],
+            }))
+          }
         },
       })
 
@@ -4326,10 +4439,13 @@ app.post('/api/design-analysis/analyze', async (c) => {
         totalTokens: result.totalTokens,
         durationMs: result.durationMs,
       }))
+      persistDesignJob()
       ai.cleanup()
     } catch (err: any) {
       designAnalysisJob.status = 'error'
+      designAnalysisJob.lastError = err.message
       pushLog(designAnalysisJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+      persistDesignJob()
     } finally {
       await session.close()
     }
@@ -4366,6 +4482,15 @@ app.get('/api/design-analysis/stream', (c) => {
   })
 })
 
+app.get('/api/design-analysis/status', (c) => {
+  return c.json({
+    status: designAnalysisJob.status,
+    startedAt: designAnalysisJob.startedAt,
+    hasResult: designAnalysisJob.result !== null,
+    lastError: designAnalysisJob.lastError,
+  })
+})
+
 app.get('/api/design-analysis/results', (c) => {
   return c.json({
     status: designAnalysisJob.status,
@@ -4395,6 +4520,167 @@ app.get('/api/design-analysis/stats', async (c) => {
   } finally {
     await session.close()
   }
+})
+
+// ── API: SubModule management + Misassigned reassignment ────
+
+// DELETE /api/design-analysis/submodules — delete ALL submodules for a repo
+app.delete('/api/design-analysis/submodules', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const session = await getSession()
+  try {
+    const countRes = await session.run(
+      `MATCH (sub:SubModule {repo: $repo}) RETURN count(sub) AS cnt`,
+      { repo: repoName },
+    )
+    const cnt = num(countRes.records[0]?.get('cnt'))
+    await session.run(
+      `MATCH (sub:SubModule {repo: $repo}) DETACH DELETE sub`,
+      { repo: repoName },
+    )
+    return c.json({ deleted: cnt })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// DELETE /api/design-analysis/submodules/:id — delete one submodule
+app.delete('/api/design-analysis/submodules/:id', async (c) => {
+  const subId = c.req.param('id')
+  const session = await getSession()
+  try {
+    await session.run(
+      `MATCH (sub:SubModule {id: $id}) DETACH DELETE sub`,
+      { id: subId },
+    )
+    return c.json({ deleted: subId })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// DELETE /api/design-analysis/all — delete ALL design data (submodules + modules)
+app.delete('/api/design-analysis/all', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const session = await getSession()
+  try {
+    const subRes = await session.run(`MATCH (sub:SubModule {repo: $repo}) RETURN count(sub) AS cnt`, { repo: repoName })
+    const modRes = await session.run(`MATCH (sm:SemanticModule {repo: $repo}) RETURN count(sm) AS cnt`, { repo: repoName })
+    const subCnt = num(subRes.records[0]?.get('cnt'))
+    const modCnt = num(modRes.records[0]?.get('cnt'))
+    await session.run(`MATCH (sub:SubModule {repo: $repo}) DETACH DELETE sub`, { repo: repoName })
+    await session.run(`MATCH (sm:SemanticModule {repo: $repo}) DETACH DELETE sm`, { repo: repoName })
+    // Also clean scenario data
+    await session.run(`MATCH (sc:Scenario {repo: $repo}) DETACH DELETE sc`, { repo: repoName })
+    await session.run(`MATCH (a:SubModule {repo: $repo})-[r:SUB_CALLS]->(b) DELETE r`, { repo: repoName })
+    return c.json({ deletedSubModules: subCnt, deletedModules: modCnt })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// GET /api/design-analysis/misassigned — read misassigned file
+app.get('/api/design-analysis/misassigned', (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const filePath = path.join('data', `${repoName}-misassigned.json`)
+  if (!fs.existsSync(filePath)) {
+    return c.json({ count: 0, functions: [] })
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    return c.json({ count: data.length, functions: data })
+  } catch {
+    return c.json({ count: 0, functions: [] })
+  }
+})
+
+// POST /api/design-analysis/reassign — trigger Layer 2.5 reassignment
+const reassignJob = {
+  status: 'idle' as 'idle' | 'running' | 'done' | 'error',
+  logs: new LogBuffer(),
+  result: null as any,
+  startedAt: 0,
+  abortRequested: false,
+}
+
+app.post('/api/design-analysis/reassign', async (c) => {
+  if (reassignJob.status === 'running') {
+    return c.json({ error: 'Reassignment already running' }, 409)
+  }
+
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  const body = await c.req.json().catch(() => ({}))
+  const repoName = body.repo || config.repos?.[0]?.name
+  if (!repoName) return c.json({ error: 'No repo specified' }, 400)
+
+  reassignJob.status = 'running'
+  reassignJob.logs.clear()
+  reassignJob.result = null
+  reassignJob.abortRequested = false
+  reassignJob.startedAt = Date.now()
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(reassignJob.logs, JSON.stringify({ type: 'started', repo: repoName }))
+
+      const result = await runReassignment({
+        dbSession: session, ai, repo: repoName,
+        dryRun: false,
+        onProgress: (msg) => pushLog(reassignJob.logs, JSON.stringify({ type: 'progress', message: msg })),
+      })
+
+      reassignJob.result = result
+      reassignJob.status = 'done'
+      pushLog(reassignJob.logs, JSON.stringify({
+        type: 'done', reassigned: result.reassigned,
+        infrastructure: result.infrastructure, tokens: result.tokens,
+      }))
+      ai.cleanup()
+    } catch (err: any) {
+      reassignJob.status = 'error'
+      pushLog(reassignJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started' })
+})
+
+app.get('/api/design-analysis/reassign/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = reassignJob.logs.readAfter(lastSeq)
+      for (const entry of entries) {
+        await stream.writeSSE({ data: entry, event: 'log' })
+      }
+      if (entries.length > 0) lastSeq = newSeq
+      if (reassignJob.status !== 'running' && reassignJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: reassignJob.status, event: 'status' })
+        break
+      }
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+app.get('/api/design-analysis/reassign/results', (c) => {
+  return c.json({ status: reassignJob.status, result: reassignJob.result })
 })
 
 // ── API: Module graph for visualization ─────────────────────
@@ -4445,6 +4731,582 @@ app.get('/api/graph/modules', async (c) => {
     }))
 
     return c.json({ modules, subModules, edges })
+  } finally {
+    await session.close()
+  }
+})
+
+// ── Architecture Documentation API ────────────────────────
+
+const archDocJob = {
+  status: 'idle' as 'idle' | 'running' | 'done' | 'error',
+  logs: new LogBuffer(),
+  result: null as ArchDocResult | null,
+  startedAt: 0,
+  abortRequested: false,
+}
+
+app.post('/api/arch-docs/generate', async (c) => {
+  if (archDocJob.status === 'running') return c.json({ error: 'Already running' }, 409)
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+  const body = await c.req.json().catch(() => ({}))
+  const repoName = body.repo || config.repos?.[0]?.name
+  if (!repoName) return c.json({ error: 'No repo' }, 400)
+
+  archDocJob.status = 'running'
+  archDocJob.logs.clear()
+  archDocJob.result = null
+  archDocJob.abortRequested = false
+  archDocJob.startedAt = Date.now()
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(archDocJob.logs, JSON.stringify({ type: 'started', repo: repoName }))
+      const result = await generateArchDocs({
+        dbSession: session, ai, repo: repoName,
+        concurrency: body.concurrency ?? 5,
+        limit: body.limit,
+        shouldAbort: () => archDocJob.abortRequested,
+        onProgress: (msg) => pushLog(archDocJob.logs, JSON.stringify({ type: 'progress', message: msg })),
+      })
+      archDocJob.result = result
+      archDocJob.status = 'done'
+      pushLog(archDocJob.logs, JSON.stringify({ type: 'done', tokens: result.totalTokens, modules: result.moduleDocs.length }))
+      ai.cleanup()
+    } catch (err: any) {
+      archDocJob.status = 'error'
+      pushLog(archDocJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally { await session.close() }
+  })()
+  return c.json({ status: 'started' })
+})
+
+app.post('/api/arch-docs/stop', (c) => {
+  if (archDocJob.status === 'running') {
+    archDocJob.abortRequested = true
+    pushLog(archDocJob.logs, JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'ok' })
+})
+
+app.get('/api/arch-docs/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = archDocJob.logs.readAfter(lastSeq)
+      for (const entry of entries) await stream.writeSSE({ data: entry, event: 'log' })
+      if (entries.length > 0) lastSeq = newSeq
+      if (archDocJob.status !== 'running' && archDocJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: archDocJob.status, event: 'status' })
+        break
+      }
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+app.get('/api/arch-docs/results', (c) => c.json({ status: archDocJob.status, result: archDocJob.result }))
+
+// Serve arch docs from file
+app.get('/api/arch-docs/overview', (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const filePath = path.join('data', `${repoName}-arch-docs.json`)
+  if (!fs.existsSync(filePath)) return c.json({ error: 'No arch docs generated yet. Run the generator first.' }, 404)
+  try {
+    const data: ArchDocResult = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    return c.json({
+      globalOverview: data.globalOverview,
+      modules: data.moduleDocs.map(d => ({
+        moduleId: d.moduleId,
+        overview: d.overview,
+        responsibility: d.responsibility,
+        crossModuleRelationships: d.crossModuleRelationships,
+        scenarioRoles: d.scenarioRoles,
+      })),
+    })
+  } catch (err: any) { return c.json({ error: err.message }, 500) }
+})
+
+app.get('/api/arch-docs/module/:moduleId', (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const moduleId = c.req.param('moduleId')
+  const filePath = path.join('data', `${repoName}-arch-docs.json`)
+  if (!fs.existsSync(filePath)) return c.json({ error: 'No arch docs' }, 404)
+  try {
+    const data: ArchDocResult = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    const doc = data.moduleDocs.find(d => d.moduleId === moduleId)
+    if (!doc) return c.json({ error: 'Module not found' }, 404)
+    return c.json(doc)
+  } catch (err: any) { return c.json({ error: err.message }, 500) }
+})
+
+// SubModule detail (real-time from graph)
+app.get('/api/arch-docs/submodule/:subModuleId', async (c) => {
+  const subId = c.req.param('subModuleId')
+  const session = await getSession()
+  try {
+    // SubModule info
+    const subRes = await session.run(
+      `MATCH (sub:SubModule {id: $id})
+       OPTIONAL MATCH (sub)-[:CHILD_OF]->(sm:SemanticModule)
+       RETURN sub.name AS name, sub.description AS description,
+              sm.id AS parentModuleId, sm.name AS parentModuleName`,
+      { id: subId },
+    )
+    if (subRes.records.length === 0) return c.json({ error: 'SubModule not found' }, 404)
+    const subInfo = {
+      id: subId,
+      name: subRes.records[0].get('name'),
+      description: subRes.records[0].get('description') || '',
+      parentModuleId: subRes.records[0].get('parentModuleId'),
+      parentModuleName: subRes.records[0].get('parentModuleName'),
+    }
+
+    // Functions
+    const fnRes = await session.run(
+      `MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sub:SubModule {id: $id})
+       OPTIONAL MATCH (file:CodeEntity {entity_type: 'file'})-[:CONTAINS]->(fn)
+       OPTIONAL MATCH (caller:CodeEntity)-[:CALLS]->(fn)
+       RETURN fn.name AS name, file.path AS filePath, fn.line_start AS lineStart, fn.line_end AS lineEnd,
+              count(DISTINCT caller) AS callerCount
+       ORDER BY callerCount DESC`,
+      { id: subId },
+    )
+    const functions = fnRes.records.map(r => ({
+      name: r.get('name'),
+      filePath: r.get('filePath') || '',
+      lineStart: num(r.get('lineStart')),
+      lineEnd: num(r.get('lineEnd')),
+      callerCount: num(r.get('callerCount')),
+    }))
+
+    // Decisions
+    const decRes = await session.run(
+      `MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sub:SubModule {id: $id})
+       MATCH (dc:DecisionContext)-[:ANCHORED_TO]->(fn)
+       RETURN dc.summary AS summary, dc.content AS content, fn.name AS anchorFunction`,
+      { id: subId },
+    )
+    const decisions = decRes.records.map(r => ({
+      summary: r.get('summary'),
+      content: r.get('content') || '',
+      anchorFunction: r.get('anchorFunction'),
+    }))
+
+    return c.json({ ...subInfo, functions, decisions })
+  } catch (err: any) { return c.json({ error: err.message }, 500) }
+  finally { await session.close() }
+})
+
+// Function detail (source code + call graph + decisions)
+app.get('/api/arch-docs/function', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const fnName = c.req.query('name')
+  const filePath = c.req.query('file')
+  if (!fnName || !filePath) return c.json({ error: 'name and file required' }, 400)
+
+  const repoConfig = config.repos?.find((r: any) => r.name === repoName)
+  const session = await getSession()
+  try {
+    // Function info
+    const fnRes = await session.run(
+      `MATCH (file:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function', name: $fnName, repo: $repo})
+       RETURN fn.line_start AS lineStart, fn.line_end AS lineEnd`,
+      { fnName, filePath, repo: repoName },
+    )
+    if (fnRes.records.length === 0) return c.json({ error: 'Function not found' }, 404)
+    const lineStart = num(fnRes.records[0].get('lineStart'))
+    const lineEnd = num(fnRes.records[0].get('lineEnd'))
+
+    // Source code
+    let sourceCode = ''
+    if (repoConfig?.path) {
+      sourceCode = extractFunctionCode(repoConfig.path, filePath, lineStart, lineEnd) || ''
+    }
+
+    // Callers
+    const callerRes = await session.run(
+      `MATCH (caller:CodeEntity {entity_type: 'function'})-[:CALLS]->(fn:CodeEntity {name: $fnName, repo: $repo})
+       MATCH (file:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
+       OPTIONAL MATCH (callerFile:CodeEntity {entity_type: 'file'})-[:CONTAINS]->(caller)
+       RETURN caller.name AS name, callerFile.path AS filePath
+       LIMIT 20`,
+      { fnName, filePath, repo: repoName },
+    )
+    const callers = callerRes.records.map(r => ({ name: r.get('name'), filePath: r.get('filePath') || '' }))
+
+    // Callees
+    const calleeRes = await session.run(
+      `MATCH (fn:CodeEntity {name: $fnName, repo: $repo})-[:CALLS]->(callee:CodeEntity {entity_type: 'function'})
+       MATCH (file:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
+       OPTIONAL MATCH (calleeFile:CodeEntity {entity_type: 'file'})-[:CONTAINS]->(callee)
+       RETURN callee.name AS name, calleeFile.path AS filePath
+       LIMIT 20`,
+      { fnName, filePath, repo: repoName },
+    )
+    const callees = calleeRes.records.map(r => ({ name: r.get('name'), filePath: r.get('filePath') || '' }))
+
+    // Decisions
+    const decRes = await session.run(
+      `MATCH (fn:CodeEntity {name: $fnName, repo: $repo})
+       MATCH (file:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
+       MATCH (dc:DecisionContext)-[:ANCHORED_TO]->(fn)
+       RETURN dc.summary AS summary, dc.content AS content`,
+      { fnName, filePath, repo: repoName },
+    )
+    const decisions = decRes.records.map(r => ({ summary: r.get('summary'), content: r.get('content') || '' }))
+
+    // Module/SubModule context
+    const ctxRes = await session.run(
+      `MATCH (fn:CodeEntity {name: $fnName, repo: $repo})
+       MATCH (file:CodeEntity {entity_type: 'file', path: $filePath})-[:CONTAINS]->(fn)
+       OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sub:SubModule)
+       OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sm:SemanticModule)
+       RETURN collect(DISTINCT {id: sub.id, name: sub.name}) AS subModules,
+              collect(DISTINCT {id: sm.id, name: sm.name}) AS modules`,
+      { fnName, filePath, repo: repoName },
+    )
+    const ctx = ctxRes.records[0]
+    const subModules = (ctx?.get('subModules') || []).filter((s: any) => s.id)
+    const modules = (ctx?.get('modules') || []).filter((s: any) => s.id)
+
+    return c.json({
+      name: fnName, filePath, lineStart, lineEnd,
+      sourceCode, callers, callees, decisions,
+      subModules, modules,
+    })
+  } catch (err: any) { return c.json({ error: err.message }, 500) }
+  finally { await session.close() }
+})
+
+// Chat with context
+app.post('/api/arch-docs/chat', async (c) => {
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  const body = await c.req.json().catch(() => ({}))
+  const { message, context, history } = body as {
+    message: string
+    context: ChatContext
+    history: { role: 'user' | 'assistant'; content: string }[]
+  }
+  if (!message) return c.json({ error: 'message required' }, 400)
+
+  const repoName = body.repo || config.repos?.[0]?.name
+  const prompt = buildChatContextPrompt(repoName, context || { level: 'system' }, history || [], message)
+
+  return streamSSE(c, async (stream) => {
+    try {
+      const ai = createAIProvider(config.ai)
+      const response = await ai.call(prompt, { timeoutMs: 120000 })
+      await stream.writeSSE({ data: JSON.stringify({ text: response }), event: 'message' })
+      await stream.writeSSE({ data: 'done', event: 'done' })
+      ai.cleanup()
+    } catch (err: any) {
+      await stream.writeSSE({ data: JSON.stringify({ error: err.message }), event: 'error' })
+      await stream.writeSSE({ data: 'error', event: 'done' })
+    }
+  })
+})
+
+// ── Scenario Analysis API ─────────────────────────────────
+
+interface ScenarioJob {
+  status: 'idle' | 'running' | 'done' | 'error'
+  logs: LogBuffer
+  result: ScenarioAnalysisResult | null
+  startedAt: number
+  abortRequested: boolean
+}
+
+const scenarioJob: ScenarioJob = {
+  status: 'idle', logs: new LogBuffer(), result: null,
+  startedAt: 0, abortRequested: false,
+}
+
+// POST /api/scenario-analysis/discover — start async job
+app.post('/api/scenario-analysis/discover', async (c) => {
+  if (scenarioJob.status === 'running') {
+    return c.json({ error: 'Scenario analysis already running' }, 409)
+  }
+
+  const config = loadConfig()
+  const aiErr = validateAIConfig(config.ai)
+  if (aiErr) return c.json({ error: aiErr }, 400)
+
+  const body = await c.req.json().catch(() => ({}))
+  const repoName = body.repo || config.repos?.[0]?.name
+  const edgesOnly = body.edgesOnly === true
+
+  if (!repoName) return c.json({ error: 'No repo specified' }, 400)
+
+  scenarioJob.status = 'running'
+  scenarioJob.logs.clear()
+  scenarioJob.result = null
+  scenarioJob.abortRequested = false
+  scenarioJob.startedAt = Date.now()
+
+  ;(async () => {
+    const session = await getSession()
+    try {
+      const ai = createAIProvider(config.ai)
+      pushLog(scenarioJob.logs, JSON.stringify({ type: 'started', repo: repoName, edgesOnly }))
+
+      const result = await runScenarioAnalysis({
+        dbSession: session, ai, repo: repoName, edgesOnly,
+        shouldAbort: () => scenarioJob.abortRequested,
+        onProgress: (msg) => pushLog(scenarioJob.logs, JSON.stringify({ type: 'progress', message: msg })),
+      })
+
+      scenarioJob.result = result
+      scenarioJob.status = 'done'
+      pushLog(scenarioJob.logs, JSON.stringify({
+        type: 'done', scenarios: result.scenariosCreated,
+        edges: result.subModuleEdges, tokens: result.tokens,
+        durationMs: result.durationMs,
+      }))
+      ai.cleanup()
+    } catch (err: any) {
+      scenarioJob.status = 'error'
+      pushLog(scenarioJob.logs, JSON.stringify({ type: 'error', error: err.message }))
+    } finally {
+      await session.close()
+    }
+  })()
+
+  return c.json({ status: 'started' })
+})
+
+// POST /api/scenario-analysis/stop
+app.post('/api/scenario-analysis/stop', (c) => {
+  if (scenarioJob.status === 'running') {
+    scenarioJob.abortRequested = true
+    pushLog(scenarioJob.logs, JSON.stringify({ type: 'stopping' }))
+  }
+  return c.json({ status: 'ok' })
+})
+
+// GET /api/scenario-analysis/stream — SSE
+app.get('/api/scenario-analysis/stream', (c) => {
+  return streamSSE(c, async (stream) => {
+    let lastSeq = -1
+    while (true) {
+      const [entries, newSeq] = scenarioJob.logs.readAfter(lastSeq)
+      for (const entry of entries) {
+        await stream.writeSSE({ data: entry, event: 'log' })
+      }
+      if (entries.length > 0) lastSeq = newSeq
+      if (scenarioJob.status !== 'running' && scenarioJob.logs.readAfter(lastSeq)[0].length === 0) {
+        await stream.writeSSE({ data: scenarioJob.status, event: 'status' })
+        break
+      }
+      await new Promise(r => setTimeout(r, 200))
+    }
+  })
+})
+
+// GET /api/scenario-analysis/results
+app.get('/api/scenario-analysis/results', (c) => {
+  return c.json({ status: scenarioJob.status, result: scenarioJob.result })
+})
+
+// GET /api/scenarios — list all scenarios for a repo
+app.get('/api/scenarios', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const session = await getSession()
+  try {
+    const result = await session.run(
+      `MATCH (s:Scenario {repo: $repo})
+       RETURN s.id AS id, s.name AS name, s.description AS description,
+              s.category AS category, s.confidence AS confidence
+       ORDER BY s.name`,
+      { repo: repoName },
+    )
+    // Count steps separately to avoid Memgraph OPTIONAL MATCH + aggregation issues
+    const scenarios = []
+    for (const r of result.records) {
+      const id = r.get('id')
+      const countRes = await session.run(
+        `MATCH (sub:SubModule)-[:PARTICIPATES_IN]->(s:Scenario {id: $id}) RETURN count(sub) AS cnt`,
+        { id },
+      )
+      scenarios.push({
+        id,
+        name: r.get('name'),
+        description: r.get('description') || '',
+        category: r.get('category') || '',
+        confidence: r.get('confidence') ?? 0,
+        stepCount: num(countRes.records[0]?.get('cnt')),
+      })
+    }
+    return c.json({ scenarios })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// GET /api/scenarios/:id/flow — full flow graph for a scenario
+app.get('/api/scenarios/:id/flow', async (c) => {
+  const scenarioId = c.req.param('id')
+  const session = await getSession()
+  try {
+    // Scenario metadata
+    const scenRes = await session.run(
+      `MATCH (s:Scenario {id: $id})
+       RETURN s.id AS id, s.name AS name, s.description AS description,
+              s.category AS category`,
+      { id: scenarioId },
+    )
+    if (scenRes.records.length === 0) {
+      return c.json({ error: 'Scenario not found' }, 404)
+    }
+    const scenario = {
+      id: scenRes.records[0].get('id'),
+      name: scenRes.records[0].get('name'),
+      description: scenRes.records[0].get('description') || '',
+      category: scenRes.records[0].get('category') || '',
+    }
+
+    // Participating submodules with parent module info
+    const nodeRes = await session.run(
+      `MATCH (sub:SubModule)-[p:PARTICIPATES_IN]->(s:Scenario {id: $id})
+       MATCH (sub)-[:CHILD_OF]->(sm:SemanticModule)
+       RETURN sub.id AS id, sub.name AS name, sub.description AS description,
+              sub.function_count AS fnCount,
+              sm.id AS parentModuleId, sm.name AS parentModuleName,
+              p.order AS order, p.role AS role`,
+      { id: scenarioId },
+    )
+    const nodes = nodeRes.records.map(r => ({
+      id: r.get('id'),
+      name: r.get('name'),
+      description: r.get('description') || '',
+      fnCount: num(r.get('fnCount')),
+      parentModuleId: r.get('parentModuleId'),
+      parentModuleName: r.get('parentModuleName'),
+      order: num(r.get('order')),
+      role: r.get('role') || 'processing',
+    }))
+
+    // Flow edges
+    const edgeRes = await session.run(
+      `MATCH (a:SubModule)-[f:FLOWS_TO {scenario_id: $id}]->(b:SubModule)
+       OPTIONAL MATCH (a)-[sc:SUB_CALLS]->(b)
+       RETURN a.id AS source, b.id AS target, f.label AS label,
+              sc.weight AS weight`,
+      { id: scenarioId },
+    )
+    const edges = edgeRes.records.map(r => ({
+      source: r.get('source'),
+      target: r.get('target'),
+      label: r.get('label') || '',
+      weight: num(r.get('weight')),
+    }))
+
+    // Unique parent modules for coloring
+    const moduleMap = new Map<string, string>()
+    nodes.forEach(n => moduleMap.set(n.parentModuleId, n.parentModuleName))
+    const MCOLORS = ['#4d8eff','#a78bfa','#34d27b','#e8b931','#22d3ee','#f472b6','#fb923c','#f05656']
+    const moduleIds = [...moduleMap.keys()]
+    const modules = moduleIds.map((id, i) => ({
+      id, name: moduleMap.get(id)!, color: MCOLORS[i % MCOLORS.length],
+    }))
+
+    // Attach color to nodes
+    const colorMap = new Map(modules.map(m => [m.id, m.color]))
+    const nodesWithColor = nodes.map(n => ({
+      ...n, parentColor: colorMap.get(n.parentModuleId) || '#4d8eff',
+    }))
+
+    return c.json({ scenario, nodes: nodesWithColor, edges, modules })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// GET /api/graph/submodule-edges — all SUB_CALLS edges
+app.get('/api/graph/submodule-edges', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const session = await getSession()
+  try {
+    const result = await session.run(
+      `MATCH (a:SubModule {repo: $repo})-[r:SUB_CALLS]->(b:SubModule)
+       RETURN a.id AS source, b.id AS target, r.weight AS weight
+       ORDER BY r.weight DESC`,
+      { repo: repoName },
+    )
+    const edges = result.records.map(r => ({
+      source: r.get('source'),
+      target: r.get('target'),
+      weight: num(r.get('weight')),
+    }))
+    return c.json({ edges })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  } finally {
+    await session.close()
+  }
+})
+
+// GET /api/scenarios/concerns — cross-cutting concern search
+app.get('/api/scenarios/concerns', async (c) => {
+  const config = loadConfig()
+  const repoName = c.req.query('repo') || config.repos?.[0]?.name
+  const term = c.req.query('term') || ''
+  if (!term) return c.json({ term: '', matchedSubModules: [], scenarioHits: [] })
+
+  const session = await getSession()
+  try {
+    // Find submodules matching the term (name or description)
+    const subRes = await session.run(
+      `MATCH (sub:SubModule {repo: $repo})-[:CHILD_OF]->(sm:SemanticModule)
+       WHERE toLower(sub.name) CONTAINS toLower($term)
+          OR toLower(sub.description) CONTAINS toLower($term)
+          OR toLower(sm.name) CONTAINS toLower($term)
+       RETURN sub.id AS id, sub.name AS name, sm.name AS parentModule`,
+      { repo: repoName, term },
+    )
+    const matchedSubModules = subRes.records.map(r => ({
+      id: r.get('id'),
+      name: r.get('name'),
+      parentModule: r.get('parentModule'),
+    }))
+
+    if (matchedSubModules.length === 0) {
+      return c.json({ term, matchedSubModules: [], scenarioHits: [] })
+    }
+
+    // Find which scenarios these submodules participate in
+    const matchedIds = matchedSubModules.map(s => s.id)
+    const hitRes = await session.run(
+      `UNWIND $ids AS subId
+       MATCH (sub:SubModule {id: subId})-[p:PARTICIPATES_IN]->(s:Scenario {repo: $repo})
+       RETURN s.id AS scenarioId, s.name AS scenarioName, collect(p.order) AS matchedSteps`,
+      { ids: matchedIds, repo: repoName },
+    )
+    const scenarioHits = hitRes.records.map(r => ({
+      scenarioId: r.get('scenarioId'),
+      scenarioName: r.get('scenarioName'),
+      matchedSteps: (r.get('matchedSteps') as any[]).map((v: any) => typeof v?.toNumber === 'function' ? v.toNumber() : v),
+    }))
+
+    return c.json({ term, matchedSubModules, scenarioHits })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
   } finally {
     await session.close()
   }
@@ -4542,103 +5404,27 @@ app.post('/api/system/quota-tracking/disable', (c) => {
   }
 })
 
-// ── Page Routes ───────────────────────────────────────────
+// ── Page Routes (auto-registered from public/*.html) ──────
 
-app.get('/design', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'design.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
+const PUBLIC_DIR = path.resolve(__dirname, 'public')
+const htmlFiles = fs.readdirSync(PUBLIC_DIR).filter(f => f.endsWith('.html'))
+for (const file of htmlFiles) {
+  const route = '/' + file.replace('.html', '')
+  app.get(route, (c) => {
+    const html = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf-8')
+    return c.html(html)
+  })
+}
 
-app.get('/concerns', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'concerns.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
+app.get('/', (c) => c.redirect('/overview'))
 
-app.get('/coverage', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'coverage.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/overview', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'overview.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/dependencies', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'dependencies.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/history', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'history.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/system', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'system.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/onboarding', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'onboarding.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/run', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'run.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/group', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'group.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/localize', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'localize.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/sessions', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'sessions.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/feedback', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'feedback.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/relationships', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'relationships.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/packages', (c) => {
-  const htmlPath = path.resolve(__dirname, 'public', 'packages.html')
-  const html = fs.readFileSync(htmlPath, 'utf-8')
-  return c.html(html)
-})
-
-app.get('/', (c) => {
-  return c.redirect('/overview')
-})
-
+// Fallback: if an HTML file exists for the path, serve it; otherwise redirect to overview
 app.get('*', (c) => {
+  const name = c.req.path.replace(/^\//, '').replace(/\/$/, '')
+  const filePath = path.join(PUBLIC_DIR, name + '.html')
+  if (name && fs.existsSync(filePath)) {
+    return c.html(fs.readFileSync(filePath, 'utf-8'))
+  }
   return c.redirect('/overview')
 })
 
@@ -4707,12 +5493,21 @@ async function main() {
 
   // Restore job state from disk (handles crash recovery)
   restoreRunJob()
+  restoreDesignJob()
+  restoreGroupJob()
+  restoreLocalizeJob()
 
   // Acquire lock (exits if another instance is running for this project)
   acquireLock(PREFERRED_PORT)
 
   // Register cleanup
-  const cleanup = () => { runJob.logs.flush(); persistRunJob(); releaseLock(); process.exit(0) }
+  const cleanup = () => {
+    runJob.logs.flush(); persistRunJob()
+    designAnalysisJob.logs.flush(); persistDesignJob()
+    groupJob.logs.flush(); persistGroupJob()
+    localizeJob.logs.flush(); persistLocalizeJob()
+    releaseLock(); process.exit(0)
+  }
   process.on('SIGINT', cleanup)
   process.on('SIGTERM', cleanup)
   process.on('exit', releaseLock)
