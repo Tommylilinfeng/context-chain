@@ -14,6 +14,7 @@
 import { Session } from 'neo4j-driver'
 import { AIProvider } from '../ai/types'
 import { parseJsonSafe, toNum, runWithConcurrency, extractFunctionCode } from './shared'
+import { NOISE_FILTER } from './noise-filter'
 import fs from 'fs'
 import path from 'path'
 import {
@@ -64,6 +65,7 @@ async function getModulesWithFunctions(session: Session, repo: string): Promise<
   const result = await session.run(
     `MATCH (sm:SemanticModule {repo: $repo})
      MATCH (fn:CodeEntity {entity_type: 'function'})-[:BELONGS_TO]->(sm)
+     WHERE ${NOISE_FILTER}
      OPTIONAL MATCH (file:CodeEntity {entity_type: 'file'})-[:CONTAINS]->(fn)
      RETURN sm.id AS moduleId, sm.name AS moduleName, sm.description AS moduleDesc,
             fn.name AS fnName, file.path AS filePath,

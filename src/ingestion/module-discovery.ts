@@ -85,6 +85,7 @@ import {
   buildSplitPrompt,
 } from '../prompts/module-discovery'
 import { parseJsonSafe, toNum, runWithConcurrency } from './shared'
+import { markNoiseFunctions, NOISE_FILTER } from './noise-filter'
 
 // ── File Scanning ────────────────────────────────────────
 
@@ -242,11 +243,9 @@ export async function writeModulesToGraph(
     { repo },
   )
 
+  // Create all module nodes first
   let modulesWritten = 0
-  let edgesWritten = 0
-
   for (const mod of modules) {
-    // Create module node
     await session.run(
       `CREATE (sm:SemanticModule {
         id: $id, name: $name, description: $description,
@@ -260,9 +259,37 @@ export async function writeModulesToGraph(
       },
     )
     modulesWritten++
+  }
 
-    // File-level assignment (from split of flat directories like utils/)
+  // Build exclusive directory → module mapping.
+  // Longest prefix wins: utils/git → git_operations takes priority over utils → foundation.
+  // This prevents parent directories from claiming functions already owned by
+  // a more specific child directory in another module.
+  const dirClaims: { dir: string; moduleId: string }[] = []
+  for (const mod of modules) {
     if (mod.files && mod.files.length > 0 && mod.parentDir) {
+      // File-level claims (from flat-dir splits) — exact file paths, highest priority
+      dirClaims.push({ dir: `FILE:${mod.moduleId}`, moduleId: mod.moduleId })
+    } else {
+      for (const dir of mod.directories) {
+        dirClaims.push({ dir, moduleId: mod.moduleId })
+      }
+    }
+  }
+
+  // Sort by directory depth descending (most specific first)
+  dirClaims.sort((a, b) => {
+    const depthA = a.dir.split('/').length
+    const depthB = b.dir.split('/').length
+    return depthB - depthA
+  })
+
+  let edgesWritten = 0
+
+  // Assign functions: most specific directory match first, skip already-assigned
+  for (const mod of modules) {
+    if (mod.files && mod.files.length > 0 && mod.parentDir) {
+      // File-level assignment
       const BATCH = 50
       for (let i = 0; i < mod.files.length; i += BATCH) {
         const batch = mod.files.slice(i, i + BATCH)
@@ -270,40 +297,57 @@ export async function writeModulesToGraph(
         const result = await session.run(
           `UNWIND $paths AS filePath
            MATCH (f:CodeEntity {entity_type: 'file', repo: $repo, path: filePath})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
+           WHERE ${NOISE_FILTER}
+             AND NOT EXISTS { MATCH (fn)-[:BELONGS_TO]->(:SemanticModule) }
            MATCH (sm:SemanticModule {id: $moduleId})
-           MERGE (fn)-[:BELONGS_TO]->(sm)
+           CREATE (fn)-[:BELONGS_TO]->(sm)
            RETURN count(*) AS cnt`,
           { paths, repo, moduleId: mod.moduleId },
         )
         edgesWritten += toNum(result.records[0]?.get('cnt'))
       }
-    } else {
-      // Directory-level assignment
-      for (const dir of mod.directories) {
-        const dirPrefix = dir.endsWith('/') ? dir : dir + '/'
-        const result = await session.run(
-          `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
-           WHERE f.path STARTS WITH $dirPrefix OR f.path = $dirExact
-           MATCH (sm:SemanticModule {id: $moduleId})
-           MERGE (fn)-[:BELONGS_TO]->(sm)
-           RETURN count(*) AS cnt`,
-          { repo, dirPrefix, dirExact: dir, moduleId: mod.moduleId },
-        )
-        edgesWritten += toNum(result.records[0]?.get('cnt'))
-      }
+    }
+  }
 
-      // Also handle root-level files (dir = ".")
-      if (mod.directories.includes('.')) {
-        const result = await session.run(
-          `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
-           WHERE NOT f.path CONTAINS '/'
-           MATCH (sm:SemanticModule {id: $moduleId})
-           MERGE (fn)-[:BELONGS_TO]->(sm)
-           RETURN count(*) AS cnt`,
-          { repo, moduleId: mod.moduleId },
-        )
-        edgesWritten += toNum(result.records[0]?.get('cnt'))
-      }
+  // Directory-level assignment: sorted by specificity (most specific first)
+  // Build ordered list of (dir, moduleId) sorted by dir depth descending
+  const dirAssignments: { dir: string; moduleId: string }[] = []
+  for (const mod of modules) {
+    if (mod.files && mod.files.length > 0 && mod.parentDir) continue // already handled above
+    for (const dir of mod.directories) {
+      dirAssignments.push({ dir, moduleId: mod.moduleId })
+    }
+  }
+  dirAssignments.sort((a, b) => {
+    const depthA = a.dir.split('/').length
+    const depthB = b.dir.split('/').length
+    return depthB - depthA  // deeper (more specific) first
+  })
+
+  for (const { dir, moduleId } of dirAssignments) {
+    if (dir === '.') {
+      const result = await session.run(
+        `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
+         WHERE NOT f.path CONTAINS '/' AND ${NOISE_FILTER}
+           AND NOT EXISTS { MATCH (fn)-[:BELONGS_TO]->(:SemanticModule) }
+         MATCH (sm:SemanticModule {id: $moduleId})
+         CREATE (fn)-[:BELONGS_TO]->(sm)
+         RETURN count(*) AS cnt`,
+        { repo, moduleId },
+      )
+      edgesWritten += toNum(result.records[0]?.get('cnt'))
+    } else {
+      const dirPrefix = dir.endsWith('/') ? dir : dir + '/'
+      const result = await session.run(
+        `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
+         WHERE (f.path STARTS WITH $dirPrefix OR f.path = $dirExact) AND ${NOISE_FILTER}
+           AND NOT EXISTS { MATCH (fn)-[:BELONGS_TO]->(:SemanticModule) }
+         MATCH (sm:SemanticModule {id: $moduleId})
+         CREATE (fn)-[:BELONGS_TO]->(sm)
+         RETURN count(*) AS cnt`,
+        { repo, dirPrefix, dirExact: dir, moduleId },
+      )
+      edgesWritten += toNum(result.records[0]?.get('cnt'))
     }
   }
 
@@ -398,26 +442,45 @@ async function runOutlierSplit(
     // Resolve file indices to filenames for single-dir splits
     const allFileNames = isSingleDir ? dirExports[0].files.map(f => f.name) : []
 
+    // All directory names for resolving dirIndices
+    const allDirNames = dirExports.map(g => g.dir)
+
     const splits: DiscoveredModule[] = newModules.map((s: any, i: number) => {
-      let directories: string[] = Array.isArray(s.directories) ? s.directories.map((d: string) => d.replace(/\/$/, '')) : []
+      let directories: string[] = []
       let files: string[] | undefined
 
-      // Resolve fileIndices → filenames
-      if (isSingleDir && Array.isArray(s.fileIndices)) {
-        files = s.fileIndices
-          .filter((idx: any) => typeof idx === 'number' && idx >= 0 && idx < allFileNames.length)
-          .map((idx: number) => allFileNames[idx])
-      }
-      // Fallback: if LLM used "files" key with actual filenames
-      if (!files && Array.isArray(s.files)) {
-        files = s.files.map((f: string) => {
-          if (f.includes('/')) return f.split('/').pop()!
-          return f
-        })
+      if (isSingleDir) {
+        // Resolve fileIndices → filenames
+        if (Array.isArray(s.fileIndices)) {
+          files = s.fileIndices
+            .filter((idx: any) => typeof idx === 'number' && idx >= 0 && idx < allFileNames.length)
+            .map((idx: number) => allFileNames[idx])
+        }
+        // Fallback: if LLM used "files" key with actual filenames
+        if (!files && Array.isArray(s.files)) {
+          files = s.files.map((f: string) => {
+            if (f.includes('/')) return f.split('/').pop()!
+            return f
+          })
+        }
+      } else {
+        // Resolve dirIndices → directory names
+        if (Array.isArray(s.dirIndices)) {
+          directories = s.dirIndices
+            .filter((idx: any) => typeof idx === 'number' && idx >= 0 && idx < allDirNames.length)
+            .map((idx: number) => allDirNames[idx])
+        }
+        // Fallback: if LLM used "directories" key with actual names
+        if (directories.length === 0 && Array.isArray(s.directories)) {
+          directories = s.directories.map((d: string) => d.replace(/\/$/, ''))
+        }
       }
 
+      // Namespace moduleId under parent to avoid collisions across splits
+      const rawId = s.moduleId || `split_${i + 1}`
+
       return {
-        moduleId: s.moduleId || `split_${i + 1}`,
+        moduleId: rawId,
         name: s.name || `Split ${i + 1}`,
         description: s.description || '',
         directories,
@@ -428,8 +491,9 @@ async function runOutlierSplit(
       }
     })
 
-    // Post-process: ensure all files are assigned for single-dir splits
+    // Post-process: ensure complete coverage
     if (isSingleDir && parentDir) {
+      // Single-dir: check all files assigned
       const assignedFiles = new Set<string>()
       for (const s of splits) {
         if (s.files) for (const f of s.files) assignedFiles.add(f)
@@ -437,7 +501,6 @@ async function runOutlierSplit(
 
       const unmatched = allFileNames.filter(f => !assignedFiles.has(f))
       if (unmatched.length > 0) {
-        // Find the split with most files as catch-all
         const largest = splits.reduce((a, b) =>
           (a.files?.length ?? 0) >= (b.files?.length ?? 0) ? a : b)
         if (largest.files) {
@@ -451,6 +514,24 @@ async function runOutlierSplit(
 
       const totalAssigned = splits.reduce((s, m) => s + (m.files?.length ?? 0), 0)
       onProgress?.(`    file coverage: ${totalAssigned}/${allFileNames.length}`)
+    } else {
+      // Multi-dir: check all directories assigned
+      const assignedDirs = new Set<string>()
+      for (const s of splits) {
+        for (const d of s.directories) assignedDirs.add(d)
+      }
+
+      const unmatchedDirs = allDirNames.filter(d => !assignedDirs.has(d))
+      if (unmatchedDirs.length > 0) {
+        // Find the largest split as catch-all
+        const largest = splits.reduce((a, b) =>
+          a.directories.length >= b.directories.length ? a : b)
+        largest.directories.push(...unmatchedDirs)
+        onProgress?.(`    ${unmatchedDirs.length} unassigned dirs → ${largest.moduleId}`)
+      }
+
+      const totalAssigned = splits.reduce((s, m) => s + m.directories.length, 0)
+      onProgress?.(`    dir coverage: ${totalAssigned}/${allDirNames.length}`)
     }
 
     for (const s of splits) {
@@ -474,8 +555,25 @@ async function runOutlierSplit(
     }
   }
 
-  onProgress?.(`Split done: ${modules.length} → ${result.length} modules (${totalTokens.toLocaleString()} tokens)`)
-  return { modules: result, tokens: totalTokens }
+  // Deduplicate IDs: if collision, suffix with _2, _3, etc.
+  const idCount = new Map<string, number>()
+  for (const m of result) {
+    const c = (idCount.get(m.moduleId) ?? 0) + 1
+    idCount.set(m.moduleId, c)
+    if (c > 1) {
+      m.moduleId = `${m.moduleId}_${c}`
+    }
+  }
+
+  // Remove empty modules (no directories AND no files)
+  const before = result.length
+  const cleaned = result.filter(m => m.directories.length > 0 || (m.files && m.files.length > 0))
+  if (cleaned.length < before) {
+    onProgress?.(`  Removed ${before - cleaned.length} empty modules (no dirs/files)`)
+  }
+
+  onProgress?.(`Split done: ${modules.length} → ${cleaned.length} modules (${totalTokens.toLocaleString()} tokens)`)
+  return { modules: cleaned, tokens: totalTokens }
 }
 
 // ── Import-based Assignment ──────────────────────────────
@@ -490,7 +588,7 @@ async function assignByImports(
   // 1. Find orphan files
   const orphanRes = await session.run(
     `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
-     WHERE fn.name <> ':program'
+     WHERE ${NOISE_FILTER}
      OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sm:SemanticModule)
      WITH f.path AS filePath, count(fn) AS total, count(sm) AS assigned
      WHERE assigned = 0
@@ -598,6 +696,7 @@ async function assignByImports(
       const result = await session.run(
         `UNWIND $paths AS filePath
          MATCH (f:CodeEntity {entity_type: 'file', repo: $repo, path: filePath})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
+         WHERE ${NOISE_FILTER}
          MATCH (sm:SemanticModule {id: $moduleId})
          MERGE (fn)-[:BELONGS_TO]->(sm)
          RETURN count(*) AS cnt`,
@@ -629,6 +728,7 @@ async function assignByImports(
       const result = await session.run(
         `UNWIND $paths AS filePath
          MATCH (f:CodeEntity {entity_type: 'file', repo: $repo, path: filePath})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
+         WHERE ${NOISE_FILTER}
          MATCH (sm:SemanticModule {id: 'foundation'})
          MERGE (fn)-[:BELONGS_TO]->(sm)
          RETURN count(*) AS cnt`,
@@ -662,6 +762,12 @@ export async function discoverModules(opts: DiscoverModulesOpts): Promise<Discov
     dryRun = false, onProgress,
   } = opts
   const startTime = Date.now()
+
+  // Step 0: Mark noise functions in graph (before any module assignment)
+  if (!dryRun) {
+    onProgress?.('Step 0: Marking noise functions...')
+    await markNoiseFunctions(dbSession, repo, onProgress)
+  }
 
   // Step 1: Scan exports
   onProgress?.('Scanning exports...')
@@ -707,7 +813,7 @@ export async function discoverModules(opts: DiscoverModulesOpts): Promise<Discov
     onProgress?.('Backfilling remaining orphan functions...')
     const fileFill = await dbSession.run(
       `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
-       WHERE fn.name <> ':program'
+       WHERE ${NOISE_FILTER}
        OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sm:SemanticModule)
        WITH f, fn, sm
        WITH f,
@@ -728,7 +834,7 @@ export async function discoverModules(opts: DiscoverModulesOpts): Promise<Discov
 
     const dirFill = await dbSession.run(
       `MATCH (f:CodeEntity {entity_type: 'file', repo: $repo})-[:CONTAINS]->(fn:CodeEntity {entity_type: 'function'})
-       WHERE fn.name <> ':program'
+       WHERE ${NOISE_FILTER}
        OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sm:SemanticModule)
        WITH fn, f, sm
        WHERE sm IS NULL
@@ -758,10 +864,10 @@ export async function discoverModules(opts: DiscoverModulesOpts): Promise<Discov
       { repo },
     )
 
-    // Count coverage
+    // Count coverage (signal functions only — noise excluded)
     const coverageResult = await dbSession.run(
       `MATCH (fn:CodeEntity {entity_type: 'function', repo: $repo})
-       WHERE fn.name <> ':program'
+       WHERE ${NOISE_FILTER}
        OPTIONAL MATCH (fn)-[:BELONGS_TO]->(sm:SemanticModule)
        RETURN
          count(fn) AS total,

@@ -145,11 +145,21 @@ ${fileLines}
 
 You MUST assign every file to exactly one module using file indices.`
   } else {
-    contentSection = `Directories and their exports:
-${formatChunk(dirExports)}`
-  }
+    // Number each directory so LLM can reference by index
+    const dirLines = dirExports.map((g, i) => {
+      const fileDetails = g.files.map(f => {
+        const shown = f.exports.slice(0, 12)
+        const suffix = f.exports.length > 12 ? ` (+${f.exports.length - 12} more)` : ''
+        return `    ${f.name}: ${shown.join(', ')}${suffix}`
+      }).join('\n')
+      return `  [${i}] ${g.dir}/ (${g.files.length} files)\n${fileDetails}`
+    }).join('\n')
+    contentSection = `This module has ${dirExports.length} directories, numbered [0]-[${dirExports.length - 1}]:
 
-  const assignUnit = isSingleDir ? 'file' : 'directory or file'
+${dirLines}
+
+You MUST assign every directory to exactly one module using "dirIndices".`
+  }
 
   return `This module is statistically too large and needs to be split into separate, independent modules.
 
@@ -166,7 +176,6 @@ ${contentSection}
 Split this into architecturally meaningful modules. Guidelines:
 - Each new module should represent a distinct responsibility
 - Aim for each module to be near or below the upper bound (~${stats.upperFence} exports)
-- Assign every ${assignUnit} to exactly one module
 - Use descriptive snake_case IDs (e.g. "auth_credentials", "session_management")
 - Let the content dictate how many modules — don't force a number
 - IMPORTANT: If this module is a cross-cutting foundation/infrastructure layer (generic utilities like logging, errors, formatting, data structures used by everything), it is OK to keep it as ONE module. Return it as-is with moduleId "foundation". Not everything needs splitting.
@@ -178,9 +187,11 @@ Respond ONLY in JSON:
       "moduleId": "snake_case_id",
       "name": "Human Readable Name",
       "description": "one-line description",
-      ${isSingleDir ? '"fileIndices": [0, 1, 5, 12],' : '"directories": ["dir1/", "dir2/"],'}
+      ${isSingleDir ? '"fileIndices": [0, 1, 5, 12],' : '"dirIndices": [0, 3, 7],'}
       "keyExports": ["export1", "export2"]
     }
   ]
-}${isSingleDir ? `\n\nCRITICAL: Every index from 0 to ${dirExports[0].files.length - 1} must appear in exactly one module's fileIndices array. Do not skip any.` : ''}`
+}
+
+CRITICAL: Every index from 0 to ${isSingleDir ? dirExports[0].files.length - 1 : dirExports.length - 1} must appear in exactly one module's ${isSingleDir ? 'fileIndices' : 'dirIndices'} array. Do not skip any.`
 }
